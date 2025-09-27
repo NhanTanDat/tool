@@ -1,3 +1,6 @@
 .venv/
 
 .exe
+*.pyc
+*.txt
+*.xml

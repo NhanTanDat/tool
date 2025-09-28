@@ -30,7 +30,15 @@ def get_dl_link_video(driver, keyword):
     search_url = f"https://www.youtube.com/results?search_query={keyword}"
     driver.get(search_url)
     driver.implicitly_wait(10)
-    sleep(5)
+    # Wait until at least one video element is present instead of using arbitrary sleep
+    from selenium.webdriver.support.ui import WebDriverWait
+    from selenium.webdriver.support import expected_conditions as EC
+    try:
+        WebDriverWait(driver, 15).until(
+            EC.presence_of_element_located((By.ID, 'video-title'))
+        )
+    except Exception as e:
+        print(f"Timeout waiting for video elements: {e}")
     #get 10 video link
     video_elements = driver.find_elements(By.ID, 'video-title')[:10]
     video_links = []
@@ -39,6 +47,8 @@ def get_dl_link_video(driver, keyword):
         href = elem.get_attribute('href')
         if 'start_radio=1' in href:
             href = href.split('&start_radio=1')[0]
+        if '&pp=ygU' in href:
+            href = href.split('&pp=ygU')[0]
         video_links.append(href)
             
     print(f"Found {len(video_links)} video links for keyword: {keyword}")

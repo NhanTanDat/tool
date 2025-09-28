@@ -25,9 +25,16 @@ Phần mềm bắt buộc:
 4. ChromeDriver (thường Selenium Manager tự xử lý khi dùng Selenium 4, nếu cần thủ công thì tải phù hợp version Chrome và để trong PATH).
 5. Adobe Premiere Pro (phiên bản hỗ trợ ExtendScript – các bản CC vẫn hỗ trợ). Premiere phải đang mở khi chạy các lệnh liên quan `.jsx`.
 
+Tạo môi trường ảo (khuyến nghị):
+```
+python -m venv venv
+.\venv\Scripts\activate
+```
+
 Python packages (cài qua pip):
 ```
 pip install -r requirements.txt
+```
 Tùy chọn thêm (nếu mở rộng):
 ```
 pip install watchdog rich
@@ -49,20 +56,11 @@ Nếu chưa có thư mục `data/`, các script sẽ tự tạo (ở cấp root 
 1. THU THẬP LINK YOUTUBE (`get_link.py`)
 ------------------------------------------------------------
 
-Chuẩn bị file từ khóa: tạo `data/list_name.txt`, ví dụ:
+chạy GUI:
+parent_folder là thư mục sẽ chứa video
+project_path là đường dẫn đến file proprej
+link_list_path là nơi lưu link thu thập
 ```
-cat funny cats
-amber portwood interview
-premiere pro tutorial
-```
-
-Chạy tool:
-```
-python core/downloadTool/get_link.py
-```
-Kết quả:
-- `data/dl_links.txt` chứa danh sách: số thứ tự, dòng keyword, rồi các link video.
-
 Ghi chú:
 - Script tự scroll 1 lần để lấy thêm kết quả.
 - Giới hạn ~20 link đầu mỗi keyword (có thể chỉnh trong mã: lát cắt `[:20]`).

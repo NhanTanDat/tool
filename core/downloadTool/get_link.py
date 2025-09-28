@@ -1,10 +1,13 @@
 #using selenium to download video and image  by search keyword
+from lib2to3.pgen2 import driver
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
 
+from pywinauto import Application, Desktop
+from pywinauto.keyboard import send_keys
 import json
 
 from time import sleep
@@ -39,8 +42,15 @@ def get_dl_link_video(driver, keyword):
         )
     except Exception as e:
         print(f"Timeout waiting for video elements: {e}")
-    #get 10 video link
-    video_elements = driver.find_elements(By.ID, 'video-title')[:10]
+    # Scroll once to load more results (YouTube lazy loads additional items on scroll)
+    try:
+        driver.execute_script("window.scrollTo(0, document.documentElement.scrollHeight);")
+        sleep(2)  # small wait for new elements to render
+    except Exception as e:
+        print(f"Scroll attempt failed (continuing): {e}")
+
+    # get up all link
+    video_elements = driver.find_elements(By.ID, 'video-title')[:20]  # limit to first 20 results
     video_links = []
     for elem in video_elements:
         #get attribute href if the title text include keyword, else pass
@@ -58,64 +68,81 @@ def get_dl_link_video(driver, keyword):
 
 # def get_dl_link_image(driver, keyword, num_of_image=10):
 #     #find in google image
+#     #mở to cửa sổ trình duyệt
+#     driver.maximize_window()
+
 #     search_url = f"https://www.google.com/search?tbm=isch&q={keyword}"
 #     driver.get(search_url)
 #     driver.implicitly_wait(10)
-#     sleep(10)
-#     num = 0
+#     sleep(4)
+
+#     actions = webdriver.ActionChains(driver)
+#     body = driver.find_element(By.TAG_NAME, "body")
+#     actions.move_to_element_with_offset(body, 50, 50).click().perform()
+#     sleep(5)
+
+#     send_keys('{LEFT} {LEFT} {LEFT} {LEFT} {LEFT} {LEFT} {LEFT} {LEFT} {LEFT} {LEFT} {LEFT} {LEFT} {LEFT} {LEFT} {LEFT} {LEFT}')
 #     image_links = []
-#     #find  div have id="center_col" and role = "main"
-#     images_group = driver.find_elements(By.XPATH, "//div[@id='center_col' and @role='main']")[0]
-#     if images_group:
-            
-#         while num < num_of_image:
-#             #find all by  tag a, extract image url starting from "imgurl ="
-#             image_tags = images_group.find_elements(By.TAG_NAME, 'a')
-#             for tag in image_tags:
-#                 href = tag.get_attribute('href')
-#                 if href and 'imgurl=' in href:
-#                     start_index = href.index('imgurl=') + len('imgurl=')
-#                     end_index = href.index('&', start_index)
-#                     image_url = href[start_index:end_index]
-#                     #decode url
-#                     image_url = image_url.replace('%3A', ':').replace('%2F', '/').replace('%3F', '?').replace('%3D', '=').replace('%26', '&')
-#                     print(f"Image URL: {image_url}")
-#                     image_links.append(image_url)
-#                     num += 1
-#                     if num >= num_of_image:
-#                         break
+#     #lấy link ảnh: thẻ a, rel = "noopener", target="_blank"
+#     for i in range(num_of_image):
+#         image_element = driver.find_elements(By.XPATH, '//a[@rel="noopener" and @target="_blank"]')[0]
+#         img_tag = image_element.find_element(By.TAG_NAME, 'img')
+#         img_src = img_tag.get_attribute('src')
+#         image_links.append(img_src)
+#         send_keys('{RIGHT}')
+#         sleep(0.5)
 #     return image_links
 
 def get_links_main(keywords_file, output_txt):
     driver = init_driver()
     keywords = read_keywords_from_file(keywords_file)
     txt_name = output_txt
+    txt_image = output_txt.replace('.txt', '_images.txt')
     stt = 0
     num_vd = 0
     #save to  txt file
-    with open(txt_name, 'a') as f:
-        for keyword in keywords:
-
+    with open(txt_name, 'w') as f:
+        f.write("")  # clear file
+    with open(txt_image, 'w') as f:
+        f.write("")  # clear file
+    
+    for keyword in keywords:
+        video_links = get_dl_link_video(driver, keyword)
+        # image_links = get_dl_link_image(driver, keyword)
+        print(f"Keyword: {keyword}")
+        print("Video Links:")
+        stt += 1
+        with open(txt_name, 'a') as f:
             f.write(f"{stt}")
             f.write(" ")
             f.write(f"{keyword}\n")
-            video_links = get_dl_link_video(driver, keyword)
-            # image_links = get_dl_link_image(driver, keyword)
-            print(f"Keyword: {keyword}")
-            print("Video Links:")
-            stt += 1
             for link in video_links:
                 num_vd += 1
                 f.write(f"{link}\n")
                 print(link)
-            # print("Image Links:")
-            # for link in image_links:
-                # print(link)
+        # with open(txt_image, 'a') as f:
+        #     f.write(f"{stt}")
+        #     f.write(" ")
+        #     f.write(f"{keyword}\n")
+        #     for link in image_links:
+        #         f.write(f"{link}\n")
+        # print("Image Links:")
+        # for link in image_links:
+            # print(link)
     print(f"Total Video Links Downloaded: {num_vd}")
     close_driver(driver)
 
 
 if __name__ == "__main__":
-    keywords_file = "core/download Tool/output.txt"
-    output_txt = "core/download Tool/dl_links.txt"
+    import os, sys
+    THIS_DIR = os.path.abspath(os.path.dirname(__file__))
+    ROOT_DIR = os.path.abspath(os.path.join(THIS_DIR, '..', '..'))
+    DATA_DIR = os.path.join(ROOT_DIR, 'data')
+    if not os.path.isdir(DATA_DIR):
+        try:
+            os.makedirs(DATA_DIR, exist_ok=True)
+        except Exception:
+            pass
+    keywords_file = os.path.join(DATA_DIR, 'list_name.txt')
+    output_txt = os.path.join(DATA_DIR, 'dl_links.txt')
     get_links_main(keywords_file, output_txt)

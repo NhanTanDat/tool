@@ -9,6 +9,12 @@ from tkinter import ttk, filedialog, messagebox
 # ---------------------------------------------------------------------------
 _THIS_DIR = os.path.abspath(os.path.dirname(__file__))
 _ROOT_DIR = os.path.abspath(os.path.join(_THIS_DIR, '..'))  # project root
+DATA_DIR = os.path.join(_ROOT_DIR, 'data')
+if not os.path.isdir(DATA_DIR):
+    try:
+        os.makedirs(DATA_DIR, exist_ok=True)
+    except Exception:
+        pass
 if _ROOT_DIR not in sys.path:
     sys.path.insert(0, _ROOT_DIR)
 
@@ -248,14 +254,13 @@ class AutoToolGUI(tk.Tk):
         # Build absolute paths (PyInstaller aware: use _MEIPASS if present)
         # Base directory holding runtime resources (list_name, etc.)
         base_dir = getattr(sys, "_MEIPASS", _ROOT_DIR)
-        tool_dir = os.path.join(base_dir, "core", "downloadTool")
-        names_txt = os.path.join(tool_dir, "list_name.txt")      # list of names extracted from prproj
-        # Ensure tool_dir exists (PyInstaller may bundle differently)
-        if not os.path.isdir(tool_dir):
+        tool_dir = os.path.join(base_dir, "core", "downloadTool")  # code location, not data store
+        names_txt = os.path.join(DATA_DIR, "list_name.txt")      # moved into unified data folder
+        if not os.path.isdir(DATA_DIR):
             try:
-                os.makedirs(tool_dir, exist_ok=True)
+                os.makedirs(DATA_DIR, exist_ok=True)
             except Exception:
-                pass
+                self.log(f"WARNING: Cannot create data folder: {DATA_DIR}")
 
         # Determine links output directory
         custom_links_dir = self.links_folder_var.get().strip()
@@ -267,12 +272,12 @@ class AutoToolGUI(tk.Tk):
                     self.log(f"Created links output folder: {links_dir}")
                 except Exception as e:
                     self.log(f"WARNING: Cannot create links output folder ({e}); using default.")
-                    links_dir = tool_dir
+                    links_dir = DATA_DIR
             else:
                 self.log(f"Using custom links output folder: {links_dir}")
         else:
-            links_dir = tool_dir
-            self.log("Using default internal folder for links output.")
+            links_dir = DATA_DIR
+            self.log("Using default data folder for links output.")
         links_txt = os.path.join(links_dir, "dl_links.txt")       # list of grouped links generated
 
         # 1. Extract names
@@ -284,13 +289,7 @@ class AutoToolGUI(tk.Tk):
             return
 
         # 2. Generate links file if missing or stale (> 1h old)
-        regen = False
-        if not os.path.isfile(links_txt):
-            regen = True
-        else:
-            age = time.time() - os.path.getmtime(links_txt)
-            if age > 3600:  # older than 1 hour
-                regen = True
+        regen = True
         if regen:
             try:
                 self.log("Generating YouTube links (may take a while)...")

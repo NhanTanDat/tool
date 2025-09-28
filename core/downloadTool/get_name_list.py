@@ -101,6 +101,7 @@ def extract_text_instances_with_timing(path: str, save_txt: str = "list_names.tx
 
     if save_txt:
         with open(save_txt, "w", encoding="utf-8") as f:
+            f.write("")
             for r in results:
                 f.write(
                     f"{r['name']}|{r['start_frame']}|{r['end_frame']}|{r['start_seconds']}|{r['end_seconds']}\n"

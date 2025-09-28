@@ -269,6 +269,15 @@ def download_main(parent_folder, txt_name, _type = "mp4"):
 
     
 if __name__ == "__main__":
-    parent_folder = r"P:\ppp"
-    txt_name = "core/downloadTool/dl_links.txt"
+    import os, sys
+    THIS_DIR = os.path.abspath(os.path.dirname(__file__))
+    ROOT_DIR = os.path.abspath(os.path.join(THIS_DIR, '..', '..'))
+    DATA_DIR = os.path.join(ROOT_DIR, 'data')
+    if not os.path.isdir(DATA_DIR):
+        try:
+            os.makedirs(DATA_DIR, exist_ok=True)
+        except Exception:
+            pass
+    parent_folder = r"P:\ppp"  # chỉnh theo nhu cầu
+    txt_name = os.path.join(DATA_DIR, 'dl_links.txt')
     download_main(parent_folder, txt_name, _type = "mp4")

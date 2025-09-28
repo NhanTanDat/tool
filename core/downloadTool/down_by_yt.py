@@ -4,9 +4,38 @@ from contextlib import redirect_stdout
 import pyperclip
 from time import sleep
 import os
+import sys
 
-from .folder_handle import create_folder
-from .init_sub_app import init_dlp
+"""
+Lý do lỗi ImportError (attempted relative import with no known parent package):
+  Khi chạy file trực tiếp bằng:
+      python core/downloadTool/down_by_yt.py
+  thì __package__ = None nên cú pháp "from .folder_handle import ..." không hợp lệ.
+
+Giải pháp: Thử relative import trước (khi chạy bằng -m), nếu thất bại sẽ:
+  1. Thêm thư mục gốc dự án (root) vào sys.path
+  2. Dùng absolute import: from core.downloadTool.folder_handle import ...
+
+Khuyến nghị chạy dạng module:
+    python -m core.downloadTool.down_by_yt
+"""
+
+try:  # khi chạy bằng: python -m core.downloadTool.down_by_yt
+    from .folder_handle import create_folder  # type: ignore
+    from .init_sub_app import init_dlp  # type: ignore
+except ImportError:
+    # Fallback khi chạy trực tiếp file .py
+    THIS_FILE = os.path.abspath(__file__)
+    DOWNLOAD_TOOL_DIR = os.path.dirname(THIS_FILE)               # .../core/downloadTool
+    CORE_DIR = os.path.dirname(DOWNLOAD_TOOL_DIR)                # .../core
+    ROOT_DIR = os.path.dirname(CORE_DIR)                         # project root
+    if ROOT_DIR not in sys.path:
+        sys.path.insert(0, ROOT_DIR)
+    try:
+        from core.downloadTool.folder_handle import create_folder  # type: ignore
+        from core.downloadTool.init_sub_app import init_dlp  # type: ignore
+    except ImportError as e:
+        raise ImportError("Không thể import module phụ trợ. Kiểm tra cấu trúc thư mục. Chi tiết: " + str(e))
 
 yt_dlp_path = r"C:\Program Files (x86)\YT Helper\YT Downloader\YTDownloader.exe"
 TITLE_RE = ".*YT Downloader.*"
@@ -257,6 +286,8 @@ def download_all(dlg, links_dict, parent_folder):
     
 def download_main(parent_folder, txt_name, _type = "mp4"):
     app, dlg = init_dlp(yt_dlp_path, TITLE_RE)
+    #luuw lai control_identifiers
+    # dump_menu(dlg, filename="dlp_menu.txt")
     try:
         send_keys('^p'); send_keys('^a'); send_keys('{DEL}')
     except Exception:

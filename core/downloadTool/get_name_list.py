@@ -119,6 +119,9 @@ def extract_instance_names(path, save_txt=None):
     if save_txt:
         with open(save_txt, "w", encoding="utf-8") as f:
             for n in names:
-                f.write(n + "\n")
+                #nếu n không bắt đầu bằng 1 kí tự đơn lẻ + " " thì ghi vào file vis dụ: "A bcd" thì bỏ
+                if(n[0].isalpha() and n[1] == " "):
+                    continue
+                else:
+                    f.write(n + "\n")
     return names
-

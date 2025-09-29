@@ -342,7 +342,7 @@ function cutAndPushClipToTimeline(binName, idxBinVd, startTime, endTime, sequenc
     var inputDuration = endTime - startTime; // tổng thời lượng cần lấp trên timeline
     var randomDuration = getRandomDuration(2, 4); // độ dài đoạn lấy
     var finalDuration;
-    if (inputDuration <= 2 * randomDuration) finalDuration = inputDuration; // đoạn quá ngắn, lấy hết
+    if (inputDuration <= randomDuration) finalDuration = inputDuration; // đoạn quá ngắn, lấy hết
     else finalDuration = randomDuration; // giữ phần lớn thời gian, trừ 1 đoạn ngẫu nhiên
 
     // Lấy thời gian in/out gốc của clip nguồn (giây) trực tiếp

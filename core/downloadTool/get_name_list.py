@@ -109,7 +109,7 @@ def extract_text_instances_with_timing(path: str, save_txt: str = "list_names.tx
     return results
 
 # Giữ hàm cũ (backward compatibility)
-def extract_instance_names(path, save_txt=None):
+def extract_instance_names(path, save_txt=None, project_name=None):
     '''Extract instance names from .prproj file to a list of names.
     Input: .prproj file path, optional save_txt to save names to txt file
     Output: List of instance names

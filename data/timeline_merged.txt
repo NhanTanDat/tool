@@ -1,6 +1,0 @@
-# index | start-end(seconds) | name | textContent
-0 | 35.8 - 40.3333333333333 | Title-4 | Amber Portwood tiktok
-1 | 560.8 - 562.4 | Title-4 | Amber Portwood
-2 | 562.4 - 566.933333333333 | Title-4 | Teen Mom
-3 | 655.566666666667 - 660.1 | Title-4 | Amber Portwood
-4 | 934.1 - 938.633333333333 | Title-4 | Amber Portwood

@@ -1,68 +1,108 @@
-#using selenium to download video and image  by search keyword
-from lib2to3.pgen2 import driver
+"""YouTube link gathering utilities (improved).
+
+Fixes / Enhancements:
+ - Giữ nguyên thứ tự keyword (trước đây dùng set() làm mất thứ tự & có thể gây hiểu nhầm).
+ - Thêm logging rõ ràng cho từng bước để kiểm tra vì sao chỉ chạy được dòng đầu tiên.
+ - Thêm try/except per-keyword để nếu 1 keyword lỗi không dừng toàn bộ vòng lặp.
+ - Làm sạch & chuẩn hoá link (loại bỏ tham số thừa, chuyển /watch?v= dạng đầy đủ nếu cần).
+ - Giới hạn kết quả & loại bỏ trùng link.
+"""
+
 from selenium import webdriver
 from selenium.webdriver.common.by import By
-from selenium.webdriver.common.keys import Keys
-from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
-
-from pywinauto import Application, Desktop
-from pywinauto.keyboard import send_keys
-import json
-
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
 from time import sleep
+from typing import List
+import os
 
-def init_driver():
-    #read chrome driver path from file
-    driver  = webdriver.Chrome()
+
+def init_driver(headless: bool = False):
+    opts = Options()
+    if headless:
+        opts.add_argument('--headless=new')
+    opts.add_argument('--disable-gpu')
+    opts.add_argument('--no-sandbox')
+    opts.add_argument('--disable-dev-shm-usage')
+    opts.add_argument('--lang=en-US')
+    opts.add_argument('--disable-notifications')
+    driver = webdriver.Chrome(options=opts)
+    driver.set_page_load_timeout(60)
     return driver
 
+
 def close_driver(driver):
-    driver.quit()
-
-
-def read_keywords_from_file(file_path):
-    with open(file_path, 'r') as f:
-        #read all line to list and strip \n, if line is empty, ignore, if keyword duplicate, ignore
-        keywords = list(set([line.strip() for line in f if line.strip()]))
-    return keywords
-
-
-def get_dl_link_video(driver, keyword):
-    #find in youtube
-    search_url = f"https://www.youtube.com/results?search_query={keyword}"
-    driver.get(search_url)
-    driver.implicitly_wait(10)
-    # Wait until at least one video element is present instead of using arbitrary sleep
-    from selenium.webdriver.support.ui import WebDriverWait
-    from selenium.webdriver.support import expected_conditions as EC
     try:
-        WebDriverWait(driver, 15).until(
-            EC.presence_of_element_located((By.ID, 'video-title'))
-        )
+        driver.quit()
+    except Exception:
+        pass
+
+
+def read_keywords_from_file(file_path) -> List[str]:
+    if not os.path.isfile(file_path):
+        print(f"[get_link] Keywords file not found: {file_path}")
+        return []
+    ordered = []
+    seen = set()
+    with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+        for raw in f:
+            line = raw.strip()
+            if not line:
+                continue
+            # list_name.txt format expected: "<index> <keyword>" -> tách lấy phần sau index nếu phù hợp
+            parts = line.split(maxsplit=1)
+            if len(parts) == 2 and parts[0].isdigit():
+                keyword = parts[1].strip()
+            else:
+                keyword = line
+            if keyword and keyword not in seen:
+                seen.add(keyword)
+                ordered.append(keyword)
+    print(f"[get_link] Loaded {len(ordered)} unique keywords (order preserved).")
+    return ordered
+
+
+def _clean_href(href: str) -> str:
+    if not href:
+        return ''
+    if href.startswith('/watch'):  # relative path case
+        href = 'https://www.youtube.com' + href
+    # remove typical noise params
+    cut_tokens = ['&pp=ygU', '&start_radio=1', '&list=']
+    for token in cut_tokens:
+        if token in href:
+            href = href.split(token)[0]
+    return href
+
+
+def get_dl_link_video(driver, keyword: str, max_results: int = 20) -> List[str]:
+    search_url = f"https://www.youtube.com/results?search_query={keyword}".replace(' ', '+')
+    print(f"[get_link] Navigate: {search_url}")
+    driver.get(search_url)
+    # Wait for video title elements
+    try:
+        WebDriverWait(driver, 20).until(EC.presence_of_element_located((By.ID, 'video-title')))
     except Exception as e:
-        print(f"Timeout waiting for video elements: {e}")
-    # Scroll once to load more results (YouTube lazy loads additional items on scroll)
+        print(f"[get_link] WARNING: Timeout loading results for '{keyword}': {e}")
+    # Scroll once to encourage lazy load
     try:
         driver.execute_script("window.scrollTo(0, document.documentElement.scrollHeight);")
-        sleep(2)  # small wait for new elements to render
+        sleep(1.2)
     except Exception as e:
-        print(f"Scroll attempt failed (continuing): {e}")
+        print(f"[get_link] Scroll error (ignored): {e}")
 
-    # get up all link
-    video_elements = driver.find_elements(By.ID, 'video-title')[:20]  # limit to first 20 results
-    video_links = []
-    for elem in video_elements:
-        #get attribute href if the title text include keyword, else pass
-        href = elem.get_attribute('href')
-        if 'start_radio=1' in href:
-            href = href.split('&start_radio=1')[0]
-        if '&pp=ygU' in href:
-            href = href.split('&pp=ygU')[0]
-        video_links.append(href)
-            
-    print(f"Found {len(video_links)} video links for keyword: {keyword}")
-    return video_links
+    elements = driver.find_elements(By.ID, 'video-title')
+    links = []
+    for el in elements[:max_results]:
+        try:
+            href = _clean_href(el.get_attribute('href'))
+            if href and href.startswith('https://www.youtube.com/watch') and href not in links:
+                links.append(href)
+        except Exception:
+            continue
+    print(f"[get_link] Keyword '{keyword}' -> {len(links)} links")
+    return links
 
 
 
@@ -93,44 +133,54 @@ def get_dl_link_video(driver, keyword):
 #         sleep(0.5)
 #     return image_links
 
-def get_links_main(keywords_file, output_txt):
-    driver = init_driver()
+def get_links_main(keywords_file, output_txt, project_name=None, headless=False):
+    print("[get_link] === START get_links_main ===")
+    print(f"[get_link] keywords_file = {keywords_file}")
+    print(f"[get_link] output_txt    = {output_txt}")
+    if project_name:
+        print(f"[get_link] project_name  = {project_name}")
+
     keywords = read_keywords_from_file(keywords_file)
+    if not keywords:
+        print("[get_link] No keywords found -> abort.")
+        return
+
+    driver = init_driver(headless=headless)
     txt_name = output_txt
-    txt_image = output_txt.replace('.txt', '_images.txt')
     stt = 0
     num_vd = 0
-    #save to  txt file
-    with open(txt_name, 'w') as f:
-        f.write("")  # clear file
-    with open(txt_image, 'w') as f:
-        f.write("")  # clear file
-    
-    for keyword in keywords:
-        video_links = get_dl_link_video(driver, keyword)
-        # image_links = get_dl_link_image(driver, keyword)
-        print(f"Keyword: {keyword}")
-        print("Video Links:")
+    # clear file at start
+    try:
+        with open(txt_name, 'w', encoding='utf-8') as f:
+            f.write('')
+    except Exception as e:
+        print(f"[get_link] ERROR: cannot clear output file: {e}")
+        close_driver(driver)
+        return
+
+    for idx, keyword in enumerate(keywords, start=1):
+        print(f"[get_link] --- ({idx}/{len(keywords)}) '{keyword}' ---")
+        try:
+            video_links = get_dl_link_video(driver, keyword)
+        except Exception as e:
+            print(f"[get_link] ERROR collecting links for '{keyword}': {e}")
+            video_links = []
+
         stt += 1
-        with open(txt_name, 'a') as f:
-            f.write(f"{stt}")
-            f.write(" ")
-            f.write(f"{keyword}\n")
-            for link in video_links:
-                num_vd += 1
-                f.write(f"{link}\n")
-                print(link)
-        # with open(txt_image, 'a') as f:
-        #     f.write(f"{stt}")
-        #     f.write(" ")
-        #     f.write(f"{keyword}\n")
-        #     for link in image_links:
-        #         f.write(f"{link}\n")
-        # print("Image Links:")
-        # for link in image_links:
-            # print(link)
-    print(f"Total Video Links Downloaded: {num_vd}")
+        try:
+            with open(txt_name, 'a', encoding='utf-8') as f:
+                f.write(f"{stt} {keyword}\n")
+                for link in video_links:
+                    num_vd += 1
+                    f.write(f"{link}\n")
+        except Exception as e:
+            print(f"[get_link] ERROR writing links for '{keyword}': {e}")
+        # nhỏ delay để tránh bị chặn (có thể điều chỉnh thấp hơn nếu cần)
+        sleep(1.0)
+
+    print(f"[get_link] TOTAL video links written: {num_vd}")
     close_driver(driver)
+    print("[get_link] === END get_links_main ===")
 
 
 if __name__ == "__main__":

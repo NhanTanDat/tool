@@ -49,6 +49,7 @@ class AutoToolGUI(tk.Tk):
         self.subfolder_var = tk.StringVar()
         self.download_type_var = tk.StringVar(value="mp4")  # mp4 or mp3
         self.links_folder_var = tk.StringVar()  # optional custom folder for links list
+        self.regen_links_var = tk.BooleanVar(value=False)  # user override regen option (False = reuse if exists)
 
         self._build_ui()
         # Register global logging bridge so all prints from any module stream here
@@ -113,6 +114,7 @@ class AutoToolGUI(tk.Tk):
         ttk.Button(btn_frame, text="Validate", command=self.validate_inputs).pack(side="left", padx=(0, 6))
         ttk.Button(btn_frame, text="Create Folder", command=self.create_subfolder).pack(side="left", padx=6)
         ttk.Button(btn_frame, text="Run Automation", command=self.run_automation).pack(side="left", padx=6)
+        ttk.Button(btn_frame, text="Links Status", command=self.open_links_status_window).pack(side="left", padx=6)
         ttk.Button(btn_frame, text="Clear Log", command=self.clear_log).pack(side="left", padx=6)
 
         row += 1
@@ -254,13 +256,23 @@ class AutoToolGUI(tk.Tk):
         # Build absolute paths (PyInstaller aware: use _MEIPASS if present)
         # Base directory holding runtime resources (list_name, etc.)
         base_dir = getattr(sys, "_MEIPASS", _ROOT_DIR)
-        tool_dir = os.path.join(base_dir, "core", "downloadTool")  # code location, not data store
-        names_txt = os.path.join(DATA_DIR, "list_name.txt")      # moved into unified data folder
+        # Xây dựng thư mục data riêng cho mỗi project (.prproj) dựa trên tên file
+        safe_project = self._derive_project_slug(proj)
+        data_project_dir = os.path.join(DATA_DIR, safe_project)
+        if not os.path.isdir(data_project_dir):
+            try:
+                os.makedirs(data_project_dir, exist_ok=True)
+                self.log(f"Created project data folder: {data_project_dir}")
+            except Exception as e:
+                self.log(f"ERROR: Cannot create project data folder ({e})")
+                return
+        names_txt = os.path.join(data_project_dir, "list_name.txt")
+        # đảm bảo thư mục data gốc tồn tại (fallback)
         if not os.path.isdir(DATA_DIR):
             try:
                 os.makedirs(DATA_DIR, exist_ok=True)
             except Exception:
-                self.log(f"WARNING: Cannot create data folder: {DATA_DIR}")
+                self.log(f"WARNING: Cannot create base data folder: {DATA_DIR}")
 
         # Determine links output directory
         custom_links_dir = self.links_folder_var.get().strip()
@@ -278,22 +290,51 @@ class AutoToolGUI(tk.Tk):
         else:
             links_dir = DATA_DIR
             self.log("Using default data folder for links output.")
+        # Nếu người dùng không chọn custom links dir, ta dùng thư mục project trong data
+        if links_dir == DATA_DIR:
+            links_dir = data_project_dir
         links_txt = os.path.join(links_dir, "dl_links.txt")       # list of grouped links generated
 
         # 1. Extract names
         try:
-            get_name_list.extract_instance_names(proj, save_txt=names_txt)
+            # Ghi marker cho ExtendScript (getTimeline / cutAndPush) biết subfolder đang dùng
+            try:
+                from core.project_data import write_current_project_marker  # type: ignore
+                write_current_project_marker(safe_project)
+                self.log(f"Set current project marker: {safe_project}")
+            except Exception as _pmErr:
+                self.log(f"WARNING: Cannot write project marker ({_pmErr})")
+            get_name_list.extract_instance_names(proj, save_txt=names_txt, project_name=safe_project)
             self.log(f"Extracted instance names -> {names_txt}")
         except Exception as e:
             self.log(f"ERROR extracting names: {e}")
             return
 
         # 2. Generate links file if missing or stale (> 1h old)
-        regen = True
+        # Quyết định regen dựa trên override + tuổi file
+        regen = True  # default if file missing
+        force_flag = self.regen_links_var.get()
+        if os.path.isfile(links_txt):
+            if force_flag:  # người dùng ép regenerate
+                self.log("User override: force regenerate links file.")
+                regen = True
+            elif force_flag is False:  # reuse nếu tồn tại
+                self.log("User override: reuse existing links file (no regenerate).")
+                regen = False
+            else:
+                # fallback logic theo tuổi
+                mtime = os.path.getmtime(links_txt)
+                age = time.time() - mtime
+                if age < 3600:
+                    regen = False
+                    self.log(f"Links file exists and is recent ({age/60:.1f} min); skipping regeneration (auto logic).")
+                else:
+                    regen = True
+                    self.log(f"Links file is stale ({age/60:.1f} min); regenerating (auto logic).")
         if regen:
             try:
                 self.log("Generating YouTube links (may take a while)...")
-                get_link.get_links_main(names_txt, links_txt)
+                get_link.get_links_main(names_txt, links_txt, project_name=safe_project)
                 self.log(f"Generated links -> {links_txt}")
             except Exception as e:
                 self.log(f"WARNING: Could not generate links automatically ({e}). Using names file only.")
@@ -303,7 +344,7 @@ class AutoToolGUI(tk.Tk):
 
         # 3. Run download logic (IMPORTANT: pass links file, not names file)
         try:
-            down_by_yt.download_main(parent, links_txt, _type=dtype)
+            down_by_yt.download_main(parent, links_txt, _type=dtype, project_name=safe_project)
             self.log("Download task completed.")
         except Exception as e:
             self.log(f"ERROR during download: {e}")
@@ -316,6 +357,117 @@ class AutoToolGUI(tk.Tk):
         # e.g. call: process_project(proj, download_type=dtype)
         self.log("Automation placeholder completed.")
         self.log("=== Automation End ===")
+
+    # --------------------------------------------------------------
+    # Helper: derive project slug (shared between main & status window)
+    # --------------------------------------------------------------
+    def _derive_project_slug(self, proj_path: str) -> str:
+        project_filename = os.path.basename(proj_path)
+        stem, _ = os.path.splitext(project_filename)
+        return ''.join(ch if ch.isalnum() or ch in ('-', '_') else '_' for ch in stem)
+
+    # --------------------------------------------------------------
+    # Links status window
+    # --------------------------------------------------------------
+    def open_links_status_window(self):
+        proj = self.project_file_var.get().strip()
+        if not proj:
+            self.log("ERROR: Select a .prproj first to inspect links.")
+            return
+        slug = self._derive_project_slug(proj)
+        project_dir = os.path.join(DATA_DIR, slug)
+        links_path = os.path.join(project_dir, 'dl_links.txt')
+        names_path = os.path.join(project_dir, 'list_name.txt')
+        groups, links = self._compute_links_stats(links_path)
+        win = tk.Toplevel(self)
+        win.title(f"Links Status - {slug}")
+        win.geometry('420x260')
+        win.resizable(False, False)
+
+        pad = 8
+        info_frame = ttk.Frame(win, padding=pad)
+        info_frame.pack(fill='both', expand=True)
+
+        ttk.Label(info_frame, text=f"Project slug: {slug}").grid(row=0, column=0, sticky='w', pady=(0,4))
+        ttk.Label(info_frame, text=f"Project data dir:").grid(row=1, column=0, sticky='w')
+        ttk.Label(info_frame, text=project_dir, foreground='#444').grid(row=2, column=0, sticky='w', pady=(0,6))
+
+        if os.path.isfile(names_path):
+            try:
+                with open(names_path, 'r', encoding='utf-8', errors='ignore') as f:
+                    raw_names = [ln.strip() for ln in f if ln.strip()]
+            except Exception:
+                raw_names = []
+        else:
+            raw_names = []
+
+        ttk.Label(info_frame, text=f"Instance names file: {len(raw_names)} entries").grid(row=3, column=0, sticky='w')
+        ttk.Label(info_frame, text=f"Links file: {'FOUND' if os.path.isfile(links_path) else 'MISSING'}").grid(row=4, column=0, sticky='w')
+        ttk.Label(info_frame, text=f"Groups detected: {groups}").grid(row=5, column=0, sticky='w')
+        ttk.Label(info_frame, text=f"Total links: {links}").grid(row=6, column=0, sticky='w')
+
+        ttk.Separator(info_frame, orient='horizontal').grid(row=7, column=0, sticky='ew', pady=6)
+
+        regen_cb = ttk.Checkbutton(info_frame, text='Force regenerate links on next run', variable=self.regen_links_var)
+        regen_cb.grid(row=8, column=0, sticky='w')
+        ttk.Label(info_frame, text='(Unchecked = reuse if exists)').grid(row=9, column=0, sticky='w', pady=(0,4))
+
+        btns = ttk.Frame(info_frame)
+        btns.grid(row=10, column=0, sticky='e', pady=(10,0))
+        ttk.Button(btns, text='Refresh', command=lambda: self._refresh_links_window(win, project_dir, links_path, names_path)).pack(side='left', padx=(0,6))
+        ttk.Button(btns, text='Close', command=win.destroy).pack(side='left')
+
+    def _refresh_links_window(self, win, project_dir, links_path, names_path):
+        # Destroy and rebuild window content
+        try:
+            for child in win.winfo_children():
+                child.destroy()
+        except Exception:
+            return
+        groups, links = self._compute_links_stats(links_path)
+        try:
+            with open(names_path, 'r', encoding='utf-8', errors='ignore') as f:
+                raw_names = [ln.strip() for ln in f if ln.strip()]
+        except Exception:
+            raw_names = []
+        pad=8
+        info_frame = ttk.Frame(win, padding=pad)
+        info_frame.pack(fill='both', expand=True)
+        slug = os.path.basename(project_dir)
+        ttk.Label(info_frame, text=f"Project slug: {slug}").grid(row=0, column=0, sticky='w', pady=(0,4))
+        ttk.Label(info_frame, text=f"Project data dir:").grid(row=1, column=0, sticky='w')
+        ttk.Label(info_frame, text=project_dir, foreground='#444').grid(row=2, column=0, sticky='w', pady=(0,6))
+        ttk.Label(info_frame, text=f"Instance names file: {len(raw_names)} entries").grid(row=3, column=0, sticky='w')
+        ttk.Label(info_frame, text=f"Links file: {'FOUND' if os.path.isfile(links_path) else 'MISSING'}").grid(row=4, column=0, sticky='w')
+        ttk.Label(info_frame, text=f"Groups detected: {groups}").grid(row=5, column=0, sticky='w')
+        ttk.Label(info_frame, text=f"Total links: {links}").grid(row=6, column=0, sticky='w')
+        ttk.Separator(info_frame, orient='horizontal').grid(row=7, column=0, sticky='ew', pady=6)
+        regen_cb = ttk.Checkbutton(info_frame, text='Force regenerate links on next run', variable=self.regen_links_var)
+        regen_cb.grid(row=8, column=0, sticky='w')
+        ttk.Label(info_frame, text='(Unchecked = reuse if exists)').grid(row=9, column=0, sticky='w', pady=(0,4))
+        btns = ttk.Frame(info_frame)
+        btns.grid(row=10, column=0, sticky='e', pady=(10,0))
+        ttk.Button(btns, text='Refresh', command=lambda: self._refresh_links_window(win, project_dir, links_path, names_path)).pack(side='left', padx=(0,6))
+        ttk.Button(btns, text='Close', command=win.destroy).pack(side='left')
+
+    def _compute_links_stats(self, links_path: str):
+        groups = 0
+        total_links = 0
+        if not os.path.isfile(links_path):
+            return groups, total_links
+        try:
+            with open(links_path, 'r', encoding='utf-8', errors='ignore') as f:
+                for line in f:
+                    s = line.strip()
+                    if not s:
+                        continue
+                    if s.startswith('http://') or s.startswith('https://'):
+                        total_links += 1
+                    else:
+                        groups += 1
+        except Exception:
+            pass
+        return groups, total_links
 
 # ---------------------------------------------------------------------------
 # Entrypoint

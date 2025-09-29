@@ -108,6 +108,111 @@ function splitCSVLine(line){
 //file này chuyên thực hiện việc cắt và đẩy clip vào timeline theo data từ file JSON/CSV, đã có sẵn các bin và file media trong project
 var project;
 var sequence;
+// Lưu lại các khoảng (in,out) đã dùng cho mỗi clip nguồn để tránh cắt trùng nhau quá nhiều
+// Key: clipName + '_' + playableDurationRounded
+// Lưu cấu trúc tránh trùng: dùng thuộc tính 'start' và 'end' thay vì 'in'/'out' để tránh xung đột từ khóa.
+// Backward compatibility: nếu gặp object cũ có 'in'/'out' sẽ được chuyển đổi sang 'start'/'end'.
+var _USED_INTERVALS = {}; // { key: [ {start: Number, end: Number} , ... ] }
+
+// Cấu hình thuật toán tránh trùng
+var NON_OVERLAP_CONFIG = {
+    maxRandomTries: 12,      // số lần thử random khác trước khi quét gap
+    minSeparationFactor: 0.35, // yêu cầu đoạn mới không overlap hơn (factor * finalDuration)
+    jitterFraction: 0.15     // khi chọn trong gap có thể dịch một chút
+};
+
+function _intervalKey(videoItem, srcPlayable){
+    var nm = '';
+    try { nm = (videoItem && videoItem.name) ? videoItem.name : 'CLIP'; } catch(e){}
+    return nm + '_' + (srcPlayable||0).toFixed(3);
+}
+
+function _overlap(aStart, aEnd, bStart, bEnd){
+    return (aStart < bEnd) && (bStart < aEnd);
+}
+
+function _upgradeOldIntervals(list){
+    if (!list) return;
+    for (var i=0;i<list.length;i++){
+        var obj = list[i];
+        if (typeof obj.start === 'undefined' && typeof obj.in !== 'undefined'){
+            obj.start = obj.in; // migrate
+            obj.end = obj.out;
+            try { delete obj.in; delete obj.out; } catch(e){}
+        }
+    }
+}
+
+function _hasHeavyOverlap(newStart, newEnd, usedList, minAllowedOverlap){
+    if (!usedList) return false;
+    _upgradeOldIntervals(usedList);
+    for (var i=0;i<usedList.length;i++){
+        var u = usedList[i];
+        if (_overlap(newStart, newEnd, u.start, u.end)){
+            // tính phần overlap
+            var ovStart = Math.max(newStart, u.start);
+            var ovEnd   = Math.min(newEnd, u.end);
+            var ov = ovEnd - ovStart;
+            if (ov >= minAllowedOverlap) return true;
+        }
+    }
+    return false;
+}
+
+function _registerInterval(key, s, e){
+    if (!_USED_INTERVALS[key]) _USED_INTERVALS[key] = [];
+    var list = _USED_INTERVALS[key];
+    _upgradeOldIntervals(list);
+    list.push({start: s, end: e});
+}
+
+function _pickNonOverlappingStart(srcInSec, srcOutSec, finalDuration, key){
+    var list = _USED_INTERVALS[key] || [];
+    var maxStart = srcOutSec - finalDuration;
+    if (maxStart < srcInSec) return srcInSec; // clip ngắn
+    var attempts = NON_OVERLAP_CONFIG.maxRandomTries;
+    var minAllowedOverlap = NON_OVERLAP_CONFIG.minSeparationFactor * finalDuration;
+    for (var t=0;t<attempts;t++){
+        var cand = srcInSec + Math.random() * (maxStart - srcInSec);
+        var candEnd = cand + finalDuration;
+        if (!_hasHeavyOverlap(cand, candEnd, list, minAllowedOverlap)) {
+            _registerInterval(key, cand, candEnd);
+            return cand;
+        }
+    }
+    // Nếu random thất bại, thử tìm gap tuyến tính (sort trước)
+    if (list.length){
+        _upgradeOldIntervals(list);
+        // sao chép & sort theo start
+        var arr = list.slice().sort(function(a,b){ return a.start - b.start; });
+        // kiểm tra gap trước đoạn đầu
+        if (arr[0].start - srcInSec >= finalDuration){
+            var startGap = srcInSec;
+            _registerInterval(key, startGap, startGap+finalDuration);
+            return startGap;
+        }
+        // giữa các đoạn
+        for (var i=0;i<arr.length-1;i++){
+            var endPrev = arr[i].end;
+            var startNext = arr[i+1].start;
+            if (startNext - endPrev >= finalDuration){
+                var gapStart = endPrev + NON_OVERLAP_CONFIG.jitterFraction * Math.min(finalDuration, (startNext - endPrev - finalDuration));
+                _registerInterval(key, gapStart, gapStart+finalDuration);
+                return gapStart;
+            }
+        }
+        // gap cuối
+        if (srcOutSec - arr[arr.length-1].end >= finalDuration){
+            var tailStart = arr[arr.length-1].end;
+            _registerInterval(key, tailStart, tailStart+finalDuration);
+            return tailStart;
+        }
+    }
+    // Bất đắc dĩ: lấy random bất kỳ (chấp nhận trùng)
+    var fallback = srcInSec + Math.random() * (maxStart - srcInSec);
+    _registerInterval(key, fallback, fallback+finalDuration);
+    return fallback;
+}
 
 // =================== THAO TÁC THUẦN GIÂY ===================
 // Sử dụng trực tiếp thuộc tính .seconds của time object; bỏ toàn bộ xử lý ticks.
@@ -235,7 +340,7 @@ function cutAndPushClipToTimeline(binName, idxBinVd, startTime, endTime, sequenc
 
     // Tạo đoạn clip mới từ videoItem
     var inputDuration = endTime - startTime; // tổng thời lượng cần lấp trên timeline
-    var randomDuration = getRandomDuration(3, 4); // khoảng trừ ngẫu nhiên (giây)
+    var randomDuration = getRandomDuration(2, 4); // độ dài đoạn lấy
     var finalDuration;
     if (inputDuration <= 2 * randomDuration) finalDuration = inputDuration; // đoạn quá ngắn, lấy hết
     else finalDuration = randomDuration; // giữ phần lớn thời gian, trừ 1 đoạn ngẫu nhiên
@@ -249,10 +354,8 @@ function cutAndPushClipToTimeline(binName, idxBinVd, startTime, endTime, sequenc
         return startTime;
     }
     // Phạm vi còn lại để chọn vị trí bắt đầu ngẫu nhiên bên trong clip nguồn
-    var available = srcPlayable - finalDuration;
-    if (available < 0) available = 0; // nếu finalDuration > playable => sẽ bị cắt tại biên
-    var randomStartOffsetSec = available > 0 ? Math.random() * available : 0;
-    var newInSec = srcInSec + randomStartOffsetSec;
+    var key = _intervalKey(videoItem, srcPlayable);
+    var newInSec = _pickNonOverlappingStart(srcInSec, srcOutSec, finalDuration, key);
     var newOutSec = newInSec + finalDuration;
     if (newOutSec > srcOutSec) newOutSec = srcOutSec; // đảm bảo không vượt quá
 
@@ -276,7 +379,7 @@ function cutAndPushClipToTimeline(binName, idxBinVd, startTime, endTime, sequenc
         $.writeln('[cutAndPushClipToTimeline] Failed to create subclip from: ' + videoItem.name);
         return startTime;
     }
-    $.writeln('[cutAndPushClipToTimeline] Created subclip: ' + newClip.name + ' from ' + newInSec.toFixed(3) + 's to ' + newOutSec.toFixed(3) + 's (duration: ' + finalDuration.toFixed(3) + 's)');
+    $.writeln('[cutAndPushClipToTimeline] Created subclip: ' + newClip.name + ' from ' + newInSec.toFixed(3) + 's to ' + newOutSec.toFixed(3) + 's (duration: ' + finalDuration.toFixed(3) + 's) key=' + key);
 
     // Đẩy đoạn clip mới vào timeline tại vị trí startTime (giây)
     try {
@@ -404,11 +507,22 @@ function cutAndPushAllTimeline(tlFilePath) {
             }
             sizeBin[binName] = binSize; // lưu lại size bin
         }
-        //chọn lần lượt các video trong bin
-        var idxInBin = 0;
+        // chọn video trong bin NGẪU NHIÊN mỗi lần cắt (tránh lặp lại liên tiếp nếu có thể)
+        var lastIdx = -1;
+        function pickRandomClipIndex(sz, last){
+            if (sz <= 1) return 0;
+            var attempt = 0; var r;
+            do {
+                r = Math.floor(Math.random() * sz);
+                attempt++;
+            } while (r === last && attempt < 5); // cố gắng không trùng liên tiếp
+            return r;
+        }
         while (true){
+            var idxInBin = pickRandomClipIndex(binSize, lastIdx);
             var prevStart = startSeconds;
             startSeconds = cutAndPushClipToTimeline(binName, idxInBin, startSeconds, endSeconds, sequence, targetVideoTrack);
+            lastIdx = idxInBin;
             if (startSeconds === null || startSeconds === prevStart) { // không tiến lên -> dừng tránh vòng lặp vô hạn
                 $.writeln('[cutAndPushAllTimeline] Stop loop for entry at line ' + (i+1) + ' (no progress)');
                 break;
@@ -417,7 +531,6 @@ function cutAndPushAllTimeline(tlFilePath) {
                 $.writeln('[cutAndPushAllTimeline] Finished entry at line ' + (i+1));
                 break; // hoàn thành mục này
             }
-            idxInBin = (idxInBin + 1) % binSize; // chuyển sang video tiếp theo trong bin
         }
         processedCount++;
     }

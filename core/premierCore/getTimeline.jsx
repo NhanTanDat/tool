@@ -67,16 +67,39 @@ if (typeof JSON.parse !== 'function') {
 }
 
 // ===== Xác định thư mục data động (dựa theo vị trí script) =====
+// PROJECT-SPECIFIC DATA HANDLING
+// Nếu tồn tại file data/_current_project.txt (do Python GUI tạo) chứa tên thư mục con, dùng data/<thatName>
+// Hoặc nếu global biến PROJECT_NAME đã được set trước khi load script, cũng dùng theo.
 var DATA_FOLDER = (function(){
 	try {
 		var scriptFile = new File($.fileName);              // .../core/premierCore/getTimeline.jsx
 		var premierCoreDir = scriptFile.parent;             // premierCore
 		var coreDir = premierCoreDir.parent;                // core
 		var rootDir = coreDir.parent;                       // project root
-		var dataDir = new Folder(rootDir.fsName + '/data');
-		if (!dataDir.exists) { try { dataDir.create(); } catch(e){ $.writeln('[DATA_FOLDER] Cannot create data folder: ' + e); } }
-		$.writeln('[DATA_FOLDER] Using data folder: ' + dataDir.fsName);
-		return dataDir;
+		var baseDataDir = new Folder(rootDir.fsName + '/data');
+		if (!baseDataDir.exists) { try { baseDataDir.create(); } catch(e){ $.writeln('[DATA_FOLDER] Cannot create base data folder: ' + e); } }
+		var projectName = null;
+		// 1) Nếu có biến toàn cục PROJECT_NAME
+		try { if (typeof PROJECT_NAME !== 'undefined' && PROJECT_NAME) projectName = ''+PROJECT_NAME; } catch(_ign) {}
+		// 2) Nếu chưa có, thử đọc file _current_project.txt
+		if (!projectName) {
+			try {
+				var marker = new File(baseDataDir.fsName + '/_current_project.txt');
+				if (marker.exists && marker.open('r')) { projectName = marker.read().replace(/\r/g,'').replace(/\n/g,'').trim(); marker.close(); }
+			} catch(_e2){}
+		}
+		var finalDir = baseDataDir;
+		if (projectName) {
+			// sanitize quick
+			projectName = projectName.replace(/[^A-Za-z0-9_\-]/g,'_');
+			var sub = new Folder(baseDataDir.fsName + '/' + projectName);
+			if (!sub.exists) { try { sub.create(); } catch(e3){ $.writeln('[DATA_FOLDER] Cannot create project subfolder: ' + e3); } }
+			if (sub.exists) finalDir = sub;
+			$.writeln('[DATA_FOLDER] Project subfolder in use: ' + finalDir.fsName);
+		} else {
+			$.writeln('[DATA_FOLDER] No projectName marker; using base data folder: ' + finalDir.fsName);
+		}
+		return finalDir;
 	} catch(e2) {
 		$.writeln('[DATA_FOLDER] Fallback to desktop due to error: ' + e2);
 		return Folder.desktop;

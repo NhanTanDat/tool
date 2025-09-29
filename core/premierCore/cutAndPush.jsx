@@ -13,20 +13,31 @@ function notify(msg){
 var DATA_FOLDER = (function(){
     try {
         var scriptFile = ($.fileName) ? new File($.fileName) : null;
-        var dir = scriptFile ? scriptFile.parent : null;
-        var maxLevels = 8;
-        while (dir && maxLevels-- > 0) {
-            var candidate = new Folder(dir.fsName + '/data');
-            if (candidate.exists) {
-                $.writeln('[DATA_FOLDER] Found existing data folder: ' + candidate.fsName);
-                return candidate.fsName.replace(/\\/g,'/');
-            }
-            dir = dir.parent;
+        var dir = scriptFile ? scriptFile.parent : null; // premierCore
+        if (!dir) throw 'no script dir';
+        var coreDir = dir.parent; // core
+        var rootDir = coreDir.parent; // project root
+        var baseData = new Folder(rootDir.fsName + '/data');
+        if (!baseData.exists) { try { baseData.create(); } catch(e1) { $.writeln('[DATA_FOLDER] Cannot create base data folder: ' + e1); } }
+        var projectName = null;
+        try { if (typeof PROJECT_NAME !== 'undefined' && PROJECT_NAME) projectName = ''+PROJECT_NAME; } catch(_ign){}
+        if (!projectName) {
+            try {
+                var marker = new File(baseData.fsName + '/_current_project.txt');
+                if (marker.exists && marker.open('r')) { projectName = marker.read().replace(/\r/g,'').replace(/\n/g,'').trim(); marker.close(); }
+            } catch(_e2){}
         }
-        // fallback create near script
-        var fallback = scriptFile ? new Folder(scriptFile.parent.fsName + '/data') : new Folder(Folder.current.fsName + '/data');
-        if (!fallback.exists) { fallback.create(); $.writeln('[DATA_FOLDER] Created fallback data folder: ' + fallback.fsName); }
-        return fallback.fsName.replace(/\\/g,'/');
+        var finalDir = baseData;
+        if (projectName) {
+            projectName = projectName.replace(/[^A-Za-z0-9_\-]/g,'_');
+            var sub = new Folder(baseData.fsName + '/' + projectName);
+            if (!sub.exists) { try { sub.create(); } catch(e3){ $.writeln('[DATA_FOLDER] Cannot create project subfolder: ' + e3); } }
+            if (sub.exists) finalDir = sub;
+            $.writeln('[DATA_FOLDER] Using project subfolder: ' + finalDir.fsName);
+        } else {
+            $.writeln('[DATA_FOLDER] Using base data folder (no project marker): ' + finalDir.fsName);
+        }
+        return finalDir.fsName.replace(/\\/g,'/');
     } catch(e){
         $.writeln('[DATA_FOLDER] Resolution error: ' + e);
         var fallback2 = new Folder(Folder.current.fsName + '/data');
@@ -427,5 +438,5 @@ function cutAndPushAllTimeline(tlFilePath) {
 
 //test
 
-var csvDef = joinPath(DATA_FOLDER, 'timeline_export_merged.csv');
+var csvDef = joinPath(DATA_FOLDER, 'timeline_export_merged.csv'); // sẽ lấy trong subfolder nếu PROJECT_NAME / marker tồn tại
 cutAndPushAllTimeline(csvDef);

@@ -344,7 +344,7 @@ class AutoToolGUI(tk.Tk):
 
         # 3. Run download logic (IMPORTANT: pass links file, not names file)
         try:
-            down_by_yt.download_main(parent, links_txt, _type=dtype, project_name=safe_project)
+            down_by_yt.download_main(parent, links_txt, _type=dtype)
             self.log("Download task completed.")
         except Exception as e:
             self.log(f"ERROR during download: {e}")

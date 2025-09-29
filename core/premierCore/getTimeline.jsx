@@ -147,12 +147,16 @@ function getTopmostSelectedVideoTrackIndex() {
 }
 
 // Fallback: tìm video track đầu tiên có ít nhất 1 clip (dùng cho option A)
-function findFirstNonEmptyVideoTrackIndex() {
+// Fallback (mới): tìm video track KHÔNG RỖNG từ TRÊN XUỐNG (tức index lớn -> nhỏ)
+// Trước đây code duyệt từ 0 lên nên luôn lấy track #0 nếu có nội dung.
+// Yêu cầu người dùng: lấy "track đầu tiên có nội dung từ trên xuống".
+function findFirstNonEmptyVideoTrackIndex() { // giữ tên cũ để không phá các chỗ gọi khác
 	var seq = getActiveSequence();
 	if (!seq || !seq.videoTracks) return -1;
-	for (var i = 0; i < seq.videoTracks.numTracks; i++) {
+	for (var i = seq.videoTracks.numTracks - 1; i >= 0; i--) {
 		var vt = seq.videoTracks[i];
 		if (vt && vt.clips && vt.clips.numItems > 0) {
+			$.writeln('[fallback] Chọn top non-empty track index = ' + i + ' (total tracks=' + seq.videoTracks.numTracks + ')');
 			return i;
 		}
 	}
@@ -472,7 +476,7 @@ function runQuickTimelineTest(opts) {
 	}
 	var summary = 'Track #' + trackIndex + ' | Clips: ' + clipCount + '\n' +
 				  'Start: ' + firstStartStr + ' -> End: ' + lastEndStr + '\n' +
-				  (usedProvidedTrack ? '(Track do người dùng chỉ định)\n' : (fallbackUsed ? 'Fallback First Non-Empty Track\n' : 'Topmost Selected Track\n')) +
+				  (usedProvidedTrack ? '(Track do người dùng chỉ định)\n' : (fallbackUsed ? 'Fallback Top Non-Empty Track\n' : 'Topmost Selected Track\n')) +
 				  'Assertion (topmost is max): ' + (pass ? 'PASS' : 'FAIL');
 	$.writeln('[runQuickTimelineTest]\n' + summary);
 	if (typeof alert === 'function') {

@@ -76,7 +76,7 @@ def _clean_href(href: str) -> str:
     return href
 
 
-def get_dl_link_video(driver, keyword: str, max_results: int = 20) -> List[str]:
+def get_dl_link_video(driver, keyword: str, max_results: int = 2) -> List[str]:
     search_url = f"https://www.youtube.com/results?search_query={keyword}".replace(' ', '+')
     print(f"[get_link] Navigate: {search_url}")
     driver.get(search_url)
@@ -102,6 +102,10 @@ def get_dl_link_video(driver, keyword: str, max_results: int = 20) -> List[str]:
         except Exception:
             continue
     print(f"[get_link] Keyword '{keyword}' -> {len(links)} links")
+    if not links:
+        #add default link to avoid empty 
+        links.append("https://www.youtube.com/watch?v=WqQUvfsavO4")
+
     return links
 
 

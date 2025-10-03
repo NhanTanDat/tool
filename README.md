@@ -23,7 +23,10 @@ Phần mềm bắt buộc:
 2. Python 3.10+.
 3. Google Chrome (bản mới).
 4. ChromeDriver (thường Selenium Manager tự xử lý khi dùng Selenium 4, nếu cần thủ công thì tải phù hợp version Chrome và để trong PATH).
-5. Adobe Premiere Pro (phiên bản hỗ trợ ExtendScript – các bản CC vẫn hỗ trợ). Premiere phải đang mở khi chạy các lệnh liên quan `.jsx`.
+5. Adobe Premiere Pro (phiên bản hỗ trợ ExtendScript – các bản CC vẫn hỗ trợ). 
+6. CMake
+7. VS build tools (nếu cài `face_recognition`).
+Premiere phải đang mở khi chạy các lệnh liên quan `.jsx`.
 
 Tạo môi trường ảo (khuyến nghị):
 ```

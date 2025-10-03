@@ -38,94 +38,80 @@ except Exception:  # fallback simple implementation
 class AutoToolGUI(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("AutoTool - Premiere Automation")
-        self.geometry("680x470")
+        self.title("AutoTool - Tự động hoá Premiere")
+        self.geometry("720x520")
         self.resizable(False, False)
 
-        # State variables
         self.parent_folder_var = tk.StringVar()
         self.project_file_var = tk.StringVar()
         self.version_var = tk.StringVar(value="2024")
         self.subfolder_var = tk.StringVar()
-        self.download_type_var = tk.StringVar(value="mp4")  # mp4 or mp3
-        self.links_folder_var = tk.StringVar()  # optional custom folder for links list
-        self.regen_links_var = tk.BooleanVar(value=False)  # user override regen option (False = reuse if exists)
+        self.download_type_var = tk.StringVar(value="mp4")
+        self.links_folder_var = tk.StringVar()
+        self.regen_links_var = tk.BooleanVar(value=False)
+        self.videos_per_keyword_var = tk.StringVar(value="10")
+        self.max_duration_var = tk.StringVar(value="40")
 
         self._build_ui()
-        # Register global logging bridge so all prints from any module stream here
         try:
             from core import logging_bridge as _lb  # type: ignore
             _lb.register_gui_logger(self.log)
-            if not _lb.is_active():  # activate once
+            if not _lb.is_active():
                 _lb.activate(mirror_to_console=True)
-            self.log("[Logging] Global capture active.")
+            self.log("[Logging] Bắt đầu ghi log toàn cục.")
         except Exception as e:
-            self.log(f"WARNING: Cannot activate logging bridge: {e}")
-        self.log("Ready.")
+            self.log(f"CẢNH BÁO: Không kích hoạt được logging bridge: {e}")
+        self.log("Sẵn sàng.")
 
-    # ------------------------------------------------------------------
-    # UI construction
-    # ------------------------------------------------------------------
     def _build_ui(self):
         pad = 8
         frm = ttk.Frame(self, padding=10)
         frm.pack(fill="both", expand=True)
-
         row = 0
-        # Parent folder
-        ttk.Label(frm, text="Parent Folder:").grid(row=row, column=0, sticky="w", padx=pad, pady=(pad, 2))
-        ttk.Entry(frm, textvariable=self.parent_folder_var, width=52).grid(row=row, column=1, sticky="w", padx=pad, pady=(pad, 2))
-        ttk.Button(frm, text="Browse", command=self.browse_parent).grid(row=row, column=2, padx=pad, pady=(pad, 2))
-
+        ttk.Label(frm, text="Thư mục chứa video:").grid(row=row, column=0, sticky="w", padx=pad, pady=(pad, 2))
+        ttk.Entry(frm, textvariable=self.parent_folder_var, width=54).grid(row=row, column=1, sticky="w", padx=pad, pady=(pad, 2))
+        ttk.Button(frm, text="Chọn", command=self.browse_parent).grid(row=row, column=2, padx=pad, pady=(pad, 2))
         row += 1
-        # Project file
-        ttk.Label(frm, text="Premiere Project (.prproj):").grid(row=row, column=0, sticky="w", padx=pad, pady=2)
-        ttk.Entry(frm, textvariable=self.project_file_var, width=52).grid(row=row, column=1, sticky="w", padx=pad, pady=2)
-        ttk.Button(frm, text="Browse", command=self.browse_project).grid(row=row, column=2, padx=pad, pady=2)
-
+        ttk.Label(frm, text="File Premiere (.prproj):").grid(row=row, column=0, sticky="w", padx=pad, pady=2)
+        ttk.Entry(frm, textvariable=self.project_file_var, width=54).grid(row=row, column=1, sticky="w", padx=pad, pady=2)
+        ttk.Button(frm, text="Chọn", command=self.browse_project).grid(row=row, column=2, padx=pad, pady=2)
         row += 1
-        # Premiere version
-        ttk.Label(frm, text="Premiere Version:").grid(row=row, column=0, sticky="w", padx=pad, pady=2)
+        ttk.Label(frm, text="Phiên bản Premiere:").grid(row=row, column=0, sticky="w", padx=pad, pady=2)
         ttk.Combobox(frm, textvariable=self.version_var, values=["2022", "2023", "2024", "2025"], width=12, state="readonly").grid(row=row, column=1, sticky="w", padx=pad, pady=2)
-
         row += 1
-        # Download type (radio buttons) – only one selectable
-        ttk.Label(frm, text="Download Type:").grid(row=row, column=0, sticky="w", padx=pad, pady=2)
+        ttk.Label(frm, text="Định dạng tải:").grid(row=row, column=0, sticky="w", padx=pad, pady=2)
         type_frame = ttk.Frame(frm)
         type_frame.grid(row=row, column=1, sticky="w", padx=pad, pady=2)
         ttk.Radiobutton(type_frame, text="MP4", value="mp4", variable=self.download_type_var).pack(side="left", padx=(0, 12))
         ttk.Radiobutton(type_frame, text="MP3", value="mp3", variable=self.download_type_var).pack(side="left")
-
         row += 1
-        # Optional new subfolder
-        ttk.Label(frm, text="New Subfolder (optional):").grid(row=row, column=0, sticky="w", padx=pad, pady=2)
+        ttk.Label(frm, text="Số video / từ khoá:").grid(row=row, column=0, sticky="w", padx=pad, pady=2)
+        ttk.Entry(frm, textvariable=self.videos_per_keyword_var, width=12).grid(row=row, column=1, sticky="w", padx=pad, pady=2)
+        row += 1
+        ttk.Label(frm, text="Thời lượng tối đa (phút):").grid(row=row, column=0, sticky="w", padx=pad, pady=2)
+        ttk.Entry(frm, textvariable=self.max_duration_var, width=12).grid(row=row, column=1, sticky="w", padx=pad, pady=2)
+        row += 1
+        ttk.Label(frm, text="Thư mục con (tuỳ chọn):").grid(row=row, column=0, sticky="w", padx=pad, pady=2)
         ttk.Entry(frm, textvariable=self.subfolder_var, width=30).grid(row=row, column=1, sticky="w", padx=pad, pady=2)
-
         row += 1
-        # Optional links output folder
-        ttk.Label(frm, text="Links Output Folder (optional):").grid(row=row, column=0, sticky="w", padx=pad, pady=2)
-        ttk.Entry(frm, textvariable=self.links_folder_var, width=52).grid(row=row, column=1, sticky="w", padx=pad, pady=2)
-        ttk.Button(frm, text="Browse", command=self.browse_links_folder).grid(row=row, column=2, padx=pad, pady=2)
-
+        ttk.Label(frm, text="Thư mục lưu link (tuỳ chọn):").grid(row=row, column=0, sticky="w", padx=pad, pady=2)
+        ttk.Entry(frm, textvariable=self.links_folder_var, width=54).grid(row=row, column=1, sticky="w", padx=pad, pady=2)
+        ttk.Button(frm, text="Chọn", command=self.browse_links_folder).grid(row=row, column=2, padx=pad, pady=2)
         row += 1
-        # Buttons
         btn_frame = ttk.Frame(frm)
         btn_frame.grid(row=row, column=0, columnspan=3, sticky="w", padx=pad, pady=(12, 4))
-        ttk.Button(btn_frame, text="Validate", command=self.validate_inputs).pack(side="left", padx=(0, 6))
-        ttk.Button(btn_frame, text="Create Folder", command=self.create_subfolder).pack(side="left", padx=6)
-        ttk.Button(btn_frame, text="Run Automation", command=self.run_automation).pack(side="left", padx=6)
-        ttk.Button(btn_frame, text="Links Status", command=self.open_links_status_window).pack(side="left", padx=6)
-        ttk.Button(btn_frame, text="Clear Log", command=self.clear_log).pack(side="left", padx=6)
-
+        ttk.Button(btn_frame, text="Kiểm tra", command=self.validate_inputs).pack(side="left", padx=(0, 6))
+        ttk.Button(btn_frame, text="Tạo thư mục", command=self.create_subfolder).pack(side="left", padx=6)
+        ttk.Button(btn_frame, text="Chạy tự động", command=self.run_automation).pack(side="left", padx=6)
+        ttk.Button(btn_frame, text="Trạng thái link", command=self.open_links_status_window).pack(side="left", padx=6)
+        ttk.Button(btn_frame, text="Xoá log", command=self.clear_log).pack(side="left", padx=6)
         row += 1
-        # Log area
-        ttk.Label(frm, text="Log:").grid(row=row, column=0, sticky="nw", padx=pad, pady=(12, 2))
+        ttk.Label(frm, text="Nhật ký:").grid(row=row, column=0, sticky="nw", padx=pad, pady=(12, 2))
         self.log_text = tk.Text(frm, height=13, wrap="word")
         self.log_text.grid(row=row, column=1, columnspan=2, sticky="nsew", padx=pad, pady=(12, 2))
         scroll = ttk.Scrollbar(frm, orient="vertical", command=self.log_text.yview)
         scroll.grid(row=row, column=3, sticky="ns", pady=(12, 2))
         self.log_text.configure(yscrollcommand=scroll.set)
-
         frm.columnconfigure(1, weight=1)
 
     # ------------------------------------------------------------------
@@ -174,26 +160,26 @@ class AutoToolGUI(tk.Tk):
 
         ok = True
         if not parent:
-            self.log("ERROR: Parent folder is empty.")
+            self.log("LỖI: Chưa nhập thư mục chứa video.")
             ok = False
         elif not os.path.isdir(parent):
-            self.log("WARNING: Parent folder does not exist (will be created if needed).")
+            self.log("CẢNH BÁO: Thư mục chứa video chưa tồn tại (sẽ tạo nếu cần).")
 
         if not proj:
-            self.log("ERROR: Project file path is empty.")
+            self.log("LỖI: Chưa nhập đường dẫn file project.")
             ok = False
         elif not os.path.isfile(proj):
-            self.log("ERROR: Project file not found.")
+            self.log("LỖI: Không tìm thấy file project.")
             ok = False
         elif not proj.lower().endswith(".prproj"):
-            self.log("WARNING: File does not have .prproj extension.")
+            self.log("CẢNH BÁO: File không có đuôi .prproj.")
 
-        self.log(f"Premiere version: {version}; Download type: {dtype}")
+        self.log(f"Phiên bản Premiere: {version}; Kiểu tải: {dtype}")
         if ok:
-            self.log("Validation PASSED.")
-            messagebox.showinfo("Validation", "Inputs are valid (or creatable).")
+            self.log("Kiểm tra hợp lệ.")
+            messagebox.showinfo("Kiểm tra", "Thông tin hợp lệ (có thể tạo).")
         else:
-            messagebox.showerror("Validation", "Validation failed. See log.")
+            messagebox.showerror("Kiểm tra", "Không hợp lệ. Xem log.")
 
     def create_subfolder(self):
         parent = self.parent_folder_var.get().strip()
@@ -221,20 +207,19 @@ class AutoToolGUI(tk.Tk):
         proj = self.project_file_var.get().strip()
         version = self.version_var.get().strip()
         dtype = self.download_type_var.get()
-
-        self.log("=== Automation Start ===")
+        self.log("=== BẮT ĐẦU TỰ ĐỘNG ===")
         if not parent:
-            self.log("ERROR: Parent folder empty.")
+            self.log("LỖI: Chưa nhập thư mục chứa video.")
             return
         if not os.path.isdir(parent):
             try:
                 os.makedirs(parent, exist_ok=True)
-                self.log(f"Created parent folder: {parent}")
+                self.log(f"Đã tạo thư mục chứa video: {parent}")
             except Exception as e:
-                self.log(f"ERROR: cannot create parent folder: {e}")
+                self.log(f"LỖI: Không tạo được thư mục cha: {e}")
                 return
         if not os.path.isfile(proj):
-            self.log("ERROR: Project file missing. Abort.")
+            self.log("LỖI: Thiếu file project. Dừng.")
             return
         
         # Lazy import heavy modules only now to avoid initial GUI lag.
@@ -255,16 +240,16 @@ class AutoToolGUI(tk.Tk):
 
         # Build absolute paths (PyInstaller aware: use _MEIPASS if present)
         # Base directory holding runtime resources (list_name, etc.)
-        base_dir = getattr(sys, "_MEIPASS", _ROOT_DIR)
+        base_dir = getattr(sys, "_MEIPASS", _ROOT_DIR)  # noqa: F841 (reserved for future use)
         # Xây dựng thư mục data riêng cho mỗi project (.prproj) dựa trên tên file
         safe_project = self._derive_project_slug(proj)
         data_project_dir = os.path.join(DATA_DIR, safe_project)
         if not os.path.isdir(data_project_dir):
             try:
                 os.makedirs(data_project_dir, exist_ok=True)
-                self.log(f"Created project data folder: {data_project_dir}")
+                self.log(f"Đã tạo thư mục dữ liệu project: {data_project_dir}")
             except Exception as e:
-                self.log(f"ERROR: Cannot create project data folder ({e})")
+                self.log(f"LỖI: Không tạo được thư mục dữ liệu project ({e})")
                 return
         names_txt = os.path.join(data_project_dir, "list_name.txt")
         # đảm bảo thư mục data gốc tồn tại (fallback)
@@ -272,7 +257,7 @@ class AutoToolGUI(tk.Tk):
             try:
                 os.makedirs(DATA_DIR, exist_ok=True)
             except Exception:
-                self.log(f"WARNING: Cannot create base data folder: {DATA_DIR}")
+                self.log(f"CẢNH BÁO: Không tạo được thư mục data gốc: {DATA_DIR}")
 
         # Determine links output directory
         custom_links_dir = self.links_folder_var.get().strip()
@@ -281,15 +266,15 @@ class AutoToolGUI(tk.Tk):
             if not os.path.isdir(links_dir):
                 try:
                     os.makedirs(links_dir, exist_ok=True)
-                    self.log(f"Created links output folder: {links_dir}")
+                    self.log(f"Đã tạo thư mục lưu link: {links_dir}")
                 except Exception as e:
-                    self.log(f"WARNING: Cannot create links output folder ({e}); using default.")
+                    self.log(f"CẢNH BÁO: Không tạo được thư mục lưu link ({e}); dùng mặc định.")
                     links_dir = DATA_DIR
             else:
-                self.log(f"Using custom links output folder: {links_dir}")
+                self.log(f"Dùng thư mục link tuỳ chọn: {links_dir}")
         else:
             links_dir = DATA_DIR
-            self.log("Using default data folder for links output.")
+            self.log("Dùng thư mục data mặc định cho link.")
         # Nếu người dùng không chọn custom links dir, ta dùng thư mục project trong data
         if links_dir == DATA_DIR:
             links_dir = data_project_dir
@@ -301,13 +286,13 @@ class AutoToolGUI(tk.Tk):
             try:
                 from core.project_data import write_current_project_marker  # type: ignore
                 write_current_project_marker(safe_project)
-                self.log(f"Set current project marker: {safe_project}")
+                self.log(f"Đánh dấu project hiện tại: {safe_project}")
             except Exception as _pmErr:
-                self.log(f"WARNING: Cannot write project marker ({_pmErr})")
+                self.log(f"CẢNH BÁO: Không ghi được marker project ({_pmErr})")
             get_name_list.extract_instance_names(proj, save_txt=names_txt, project_name=safe_project)
-            self.log(f"Extracted instance names -> {names_txt}")
+            self.log(f"Đã trích tên instance -> {names_txt}")
         except Exception as e:
-            self.log(f"ERROR extracting names: {e}")
+            self.log(f"LỖI khi trích tên: {e}")
             return
 
         # 2. Generate links file if missing or stale (> 1h old)
@@ -316,10 +301,10 @@ class AutoToolGUI(tk.Tk):
         force_flag = self.regen_links_var.get()
         if os.path.isfile(links_txt):
             if force_flag:  # người dùng ép regenerate
-                self.log("User override: force regenerate links file.")
+                self.log("Ép tạo lại file link (user chọn).")
                 regen = True
             elif force_flag is False:  # reuse nếu tồn tại
-                self.log("User override: reuse existing links file (no regenerate).")
+                self.log("Giữ nguyên file link cũ (user chọn).")
                 regen = False
             else:
                 # fallback logic theo tuổi
@@ -327,36 +312,45 @@ class AutoToolGUI(tk.Tk):
                 age = time.time() - mtime
                 if age < 3600:
                     regen = False
-                    self.log(f"Links file exists and is recent ({age/60:.1f} min); skipping regeneration (auto logic).")
+                    self.log(f"File link còn mới ({age/60:.1f} phút); bỏ qua tạo lại (tự động).")
                 else:
                     regen = True
-                    self.log(f"Links file is stale ({age/60:.1f} min); regenerating (auto logic).")
+                    self.log(f"File link đã cũ ({age/60:.1f} phút); tạo lại (tự động).")
         if regen:
             try:
-                self.log("Generating YouTube links (may take a while)...")
-                get_link.get_links_main(names_txt, links_txt, project_name=safe_project)
-                self.log(f"Generated links -> {links_txt}")
+                self.log("Đang tạo link YouTube (có thể lâu)...")
+                # Lấy tham số mới (nếu GUI chưa thêm biến, fallback về 2 & None)
+                try:
+                    mpk = int(getattr(self, 'videos_per_keyword_var', tk.StringVar(value='10')).get().strip() or '10')
+                except Exception:
+                    mpk = 10
+                try:
+                    mxm = int(getattr(self, 'max_duration_var', tk.StringVar(value='0')).get().strip() or '0')
+                except Exception:
+                    mxm = 0
+                max_minutes = mxm if mxm > 0 else None
+                get_link.get_links_main(names_txt, links_txt, project_name=safe_project, max_per_keyword=mpk, max_minutes=max_minutes)
+                self.log(f"Đã tạo link -> {links_txt}")
             except Exception as e:
-                self.log(f"WARNING: Could not generate links automatically ({e}). Using names file only.")
+                self.log(f"CẢNH BÁO: Không tạo được link tự động ({e}). Dùng file tên.")
                 links_txt = names_txt  # fallback (parse will create empty groups)
         else:
-            self.log(f"Reusing existing links file -> {links_txt}")
+            self.log(f"Dùng lại file link -> {links_txt}")
 
         # 3. Run download logic (IMPORTANT: pass links file, not names file)
         try:
             down_by_yt.download_main(parent, links_txt, _type=dtype)
-            self.log("Download task completed.")
+            self.log("Tải xuống xong.")
         except Exception as e:
-            self.log(f"ERROR during download: {e}")
+            self.log(f"LỖI khi tải: {e}")
             return
 
-        # Placeholder – integrate your real logic here (parse .prproj, download, etc.)
+        # Nhật ký tổng kết
         self.log(f"Project: {proj}")
-        self.log(f"Premiere version: {version}")
-        self.log(f"Download type selected: {dtype}")
-        # e.g. call: process_project(proj, download_type=dtype)
-        self.log("Automation placeholder completed.")
-        self.log("=== Automation End ===")
+        self.log(f"Phiên bản Premiere: {version}")
+        self.log(f"Định dạng tải: {dtype}")
+        self.log("Hoàn tất quy trình.")
+        self.log("=== KẾT THÚC TỰ ĐỘNG ===")
 
     # --------------------------------------------------------------
     # Helper: derive project slug (shared between main & status window)
@@ -372,15 +366,16 @@ class AutoToolGUI(tk.Tk):
     def open_links_status_window(self):
         proj = self.project_file_var.get().strip()
         if not proj:
-            self.log("ERROR: Select a .prproj first to inspect links.")
+            self.log("LỖI: Chọn file .prproj trước khi xem link.")
             return
         slug = self._derive_project_slug(proj)
         project_dir = os.path.join(DATA_DIR, slug)
         links_path = os.path.join(project_dir, 'dl_links.txt')
         names_path = os.path.join(project_dir, 'list_name.txt')
         groups, links = self._compute_links_stats(links_path)
+
         win = tk.Toplevel(self)
-        win.title(f"Links Status - {slug}")
+        win.title(f"Trạng thái Link - {slug}")
         win.geometry('420x260')
         win.resizable(False, False)
 
@@ -388,8 +383,8 @@ class AutoToolGUI(tk.Tk):
         info_frame = ttk.Frame(win, padding=pad)
         info_frame.pack(fill='both', expand=True)
 
-        ttk.Label(info_frame, text=f"Project slug: {slug}").grid(row=0, column=0, sticky='w', pady=(0,4))
-        ttk.Label(info_frame, text=f"Project data dir:").grid(row=1, column=0, sticky='w')
+        ttk.Label(info_frame, text=f"Mã project: {slug}").grid(row=0, column=0, sticky='w', pady=(0,4))
+        ttk.Label(info_frame, text="Thư mục dữ liệu project:").grid(row=1, column=0, sticky='w')
         ttk.Label(info_frame, text=project_dir, foreground='#444').grid(row=2, column=0, sticky='w', pady=(0,6))
 
         if os.path.isfile(names_path):
@@ -401,24 +396,23 @@ class AutoToolGUI(tk.Tk):
         else:
             raw_names = []
 
-        ttk.Label(info_frame, text=f"Instance names file: {len(raw_names)} entries").grid(row=3, column=0, sticky='w')
-        ttk.Label(info_frame, text=f"Links file: {'FOUND' if os.path.isfile(links_path) else 'MISSING'}").grid(row=4, column=0, sticky='w')
-        ttk.Label(info_frame, text=f"Groups detected: {groups}").grid(row=5, column=0, sticky='w')
-        ttk.Label(info_frame, text=f"Total links: {links}").grid(row=6, column=0, sticky='w')
+        ttk.Label(info_frame, text=f"File tên instance: {len(raw_names)} dòng").grid(row=3, column=0, sticky='w')
+        ttk.Label(info_frame, text=f"File link: {'TÌM THẤY' if os.path.isfile(links_path) else 'THIẾU'}").grid(row=4, column=0, sticky='w')
+        ttk.Label(info_frame, text=f"Số nhóm: {groups}").grid(row=5, column=0, sticky='w')
+        ttk.Label(info_frame, text=f"Tổng link: {links}").grid(row=6, column=0, sticky='w')
 
         ttk.Separator(info_frame, orient='horizontal').grid(row=7, column=0, sticky='ew', pady=6)
-
-        regen_cb = ttk.Checkbutton(info_frame, text='Force regenerate links on next run', variable=self.regen_links_var)
+        regen_cb = ttk.Checkbutton(info_frame, text='Ép tạo lại link lần chạy sau', variable=self.regen_links_var)
         regen_cb.grid(row=8, column=0, sticky='w')
-        ttk.Label(info_frame, text='(Unchecked = reuse if exists)').grid(row=9, column=0, sticky='w', pady=(0,4))
+        ttk.Label(info_frame, text='(Bỏ chọn = dùng lại nếu có)').grid(row=9, column=0, sticky='w', pady=(0,4))
 
         btns = ttk.Frame(info_frame)
         btns.grid(row=10, column=0, sticky='e', pady=(10,0))
-        ttk.Button(btns, text='Refresh', command=lambda: self._refresh_links_window(win, project_dir, links_path, names_path)).pack(side='left', padx=(0,6))
-        ttk.Button(btns, text='Close', command=win.destroy).pack(side='left')
+        ttk.Button(btns, text='Làm mới', command=lambda: self._refresh_links_window(win, project_dir, links_path, names_path)).pack(side='left', padx=(0,6))
+        ttk.Button(btns, text='Đóng', command=win.destroy).pack(side='left')
 
     def _refresh_links_window(self, win, project_dir, links_path, names_path):
-        # Destroy and rebuild window content
+        # Làm mới nội dung cửa sổ trạng thái link
         try:
             for child in win.winfo_children():
                 child.destroy()
@@ -430,25 +424,25 @@ class AutoToolGUI(tk.Tk):
                 raw_names = [ln.strip() for ln in f if ln.strip()]
         except Exception:
             raw_names = []
-        pad=8
+        pad = 8
         info_frame = ttk.Frame(win, padding=pad)
         info_frame.pack(fill='both', expand=True)
         slug = os.path.basename(project_dir)
-        ttk.Label(info_frame, text=f"Project slug: {slug}").grid(row=0, column=0, sticky='w', pady=(0,4))
-        ttk.Label(info_frame, text=f"Project data dir:").grid(row=1, column=0, sticky='w')
+        ttk.Label(info_frame, text=f"Mã project: {slug}").grid(row=0, column=0, sticky='w', pady=(0,4))
+        ttk.Label(info_frame, text="Thư mục dữ liệu project:").grid(row=1, column=0, sticky='w')
         ttk.Label(info_frame, text=project_dir, foreground='#444').grid(row=2, column=0, sticky='w', pady=(0,6))
-        ttk.Label(info_frame, text=f"Instance names file: {len(raw_names)} entries").grid(row=3, column=0, sticky='w')
-        ttk.Label(info_frame, text=f"Links file: {'FOUND' if os.path.isfile(links_path) else 'MISSING'}").grid(row=4, column=0, sticky='w')
-        ttk.Label(info_frame, text=f"Groups detected: {groups}").grid(row=5, column=0, sticky='w')
-        ttk.Label(info_frame, text=f"Total links: {links}").grid(row=6, column=0, sticky='w')
+        ttk.Label(info_frame, text=f"File tên instance: {len(raw_names)} dòng").grid(row=3, column=0, sticky='w')
+        ttk.Label(info_frame, text=f"File link: {'TÌM THẤY' if os.path.isfile(links_path) else 'THIẾU'}").grid(row=4, column=0, sticky='w')
+        ttk.Label(info_frame, text=f"Số nhóm: {groups}").grid(row=5, column=0, sticky='w')
+        ttk.Label(info_frame, text=f"Tổng link: {links}").grid(row=6, column=0, sticky='w')
         ttk.Separator(info_frame, orient='horizontal').grid(row=7, column=0, sticky='ew', pady=6)
-        regen_cb = ttk.Checkbutton(info_frame, text='Force regenerate links on next run', variable=self.regen_links_var)
+        regen_cb = ttk.Checkbutton(info_frame, text='Ép tạo lại link lần chạy sau', variable=self.regen_links_var)
         regen_cb.grid(row=8, column=0, sticky='w')
-        ttk.Label(info_frame, text='(Unchecked = reuse if exists)').grid(row=9, column=0, sticky='w', pady=(0,4))
+        ttk.Label(info_frame, text='(Bỏ chọn = dùng lại nếu có)').grid(row=9, column=0, sticky='w', pady=(0,4))
         btns = ttk.Frame(info_frame)
         btns.grid(row=10, column=0, sticky='e', pady=(10,0))
-        ttk.Button(btns, text='Refresh', command=lambda: self._refresh_links_window(win, project_dir, links_path, names_path)).pack(side='left', padx=(0,6))
-        ttk.Button(btns, text='Close', command=win.destroy).pack(side='left')
+        ttk.Button(btns, text='Làm mới', command=lambda: self._refresh_links_window(win, project_dir, links_path, names_path)).pack(side='left', padx=(0,6))
+        ttk.Button(btns, text='Đóng', command=win.destroy).pack(side='left')
 
     def _compute_links_stats(self, links_path: str):
         groups = 0

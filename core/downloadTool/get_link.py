@@ -1,11 +1,12 @@
 """YouTube link gathering utilities (improved).
 
-Fixes / Enhancements:
- - Giữ nguyên thứ tự keyword (trước đây dùng set() làm mất thứ tự & có thể gây hiểu nhầm).
- - Thêm logging rõ ràng cho từng bước để kiểm tra vì sao chỉ chạy được dòng đầu tiên.
- - Thêm try/except per-keyword để nếu 1 keyword lỗi không dừng toàn bộ vòng lặp.
- - Làm sạch & chuẩn hoá link (loại bỏ tham số thừa, chuyển /watch?v= dạng đầy đủ nếu cần).
- - Giới hạn kết quả & loại bỏ trùng link.
+Tính năng:
+ - Giữ nguyên thứ tự keyword.
+ - Logging rõ ràng.
+ - Bắt lỗi từng keyword, không dừng toàn bộ.
+ - Chuẩn hoá link.
+ - Giới hạn số video / keyword (max_per_keyword).
+ - Lọc theo thời lượng tối đa (max_minutes) nếu cung cấp.
 """
 
 from selenium import webdriver
@@ -14,7 +15,8 @@ from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from time import sleep
-from typing import List
+from typing import List, Optional
+import re
 import os
 
 
@@ -76,7 +78,47 @@ def _clean_href(href: str) -> str:
     return href
 
 
-def get_dl_link_video(driver, keyword: str, max_results: int = 2) -> List[str]:
+def _parse_duration_to_seconds(txt: str) -> Optional[int]:
+    if not txt:
+        return None
+    t = txt.strip().upper()
+    if any(b in t for b in ['LIVE', 'TRỰC TIẾP', 'PREMIERE', 'UPCOMING']):
+        return None
+    parts = t.split(':')
+    if not all(p.isdigit() for p in parts):
+        return None
+    if len(parts) == 2:
+        m, s = parts
+        return int(m)*60 + int(s)
+    if len(parts) == 3:
+        h, m, s = parts
+        return int(h)*3600 + int(m)*60 + int(s)
+    return None
+
+
+def _parse_aria_duration(label: str) -> Optional[int]:
+    """Parse aria-label like '1 hour, 56 minutes, 30 seconds' -> seconds."""
+    if not label:
+        return None
+    text = label.lower()
+    # quick reject for live-like labels
+    if any(k in text for k in ['live', 'premiere', 'upcoming']):
+        return None
+    h = m = s = 0
+    mh = re.search(r'(\d+)\s*hour', text)
+    mm = re.search(r'(\d+)\s*minute', text)
+    ms = re.search(r'(\d+)\s*second', text)
+    if mh:
+        h = int(mh.group(1))
+    if mm:
+        m = int(mm.group(1))
+    if ms:
+        s = int(ms.group(1))
+    total = h*3600 + m*60 + s
+    return total if total > 0 else None
+
+
+def get_dl_link_video(driver, keyword: str, max_results: int, max_minutes: Optional[int] = None) -> List[str]:
     search_url = f"https://www.youtube.com/results?search_query={keyword}".replace(' ', '+')
     print(f"[get_link] Navigate: {search_url}")
     driver.get(search_url)
@@ -88,24 +130,67 @@ def get_dl_link_video(driver, keyword: str, max_results: int = 2) -> List[str]:
     # Scroll once to encourage lazy load
     try:
         driver.execute_script("window.scrollTo(0, document.documentElement.scrollHeight);")
-        sleep(1.2)
+        sleep(3)
     except Exception as e:
         print(f"[get_link] Scroll error (ignored): {e}")
 
     elements = driver.find_elements(By.ID, 'video-title')
-    links = []
-    for el in elements[:max_results]:
+    want = max_results
+    links: List[str] = []
+    max_seconds = max_minutes * 60 if max_minutes else None
+    # lấy nhiều hơn để lọc
+    for el in elements[:max_results*4]:
+        if len(links) >= want:
+            break
         try:
             href = _clean_href(el.get_attribute('href'))
-            if href and href.startswith('https://www.youtube.com/watch') and href not in links:
-                links.append(href)
+            if not href or href in links:
+                continue
+            dur_seconds = None
+            if max_seconds is not None:
+                # Cấu trúc mới: badge-shape / div.yt-badge-shape__text chứa thời gian
+                try:
+                    container = el.find_element(By.XPATH, '(./ancestor::ytd-video-renderer | ./ancestor::ytd-rich-item-renderer)[1]')
+                except Exception:
+                    container = None
+                if container is not None:
+                    # Thử tìm phần tử có class chứa badge-shape__text
+                    try:
+                        time_nodes = container.find_elements(
+                            By.XPATH,
+                            ".//ytd-thumbnail-overlay-time-status-renderer//*[contains(@class,'badge-shape__text') or contains(@class,'yt-badge-shape__text')]"
+                        )
+                        for tn in time_nodes:
+                            raw = (tn.text or '').strip()
+                            if ':' in raw:
+                                dur_seconds = _parse_duration_to_seconds(raw)
+                                if dur_seconds is not None:
+                                    break
+                    except Exception:
+                        pass
+                    # Fallback: aria-label trên badge-shape
+                    if dur_seconds is None:
+                        try:
+                            badge = container.find_element(By.XPATH, ".//ytd-thumbnail-overlay-time-status-renderer//badge-shape[@aria-label]")
+                            aria = badge.get_attribute('aria-label') or ''
+                            dur_seconds = _parse_aria_duration(aria)
+                        except Exception:
+                            pass
+                # Nếu vẫn không lấy được thời lượng -> bỏ qua để tránh lấy video dài không kiểm soát
+                if dur_seconds is None:
+                    #nếu video là short thì giữ lại
+                    if 'shorts' in href:
+                        links.append(href)
+                    continue
+                if dur_seconds > max_seconds:
+                    continue
+            links.append(href)
         except Exception:
             continue
-    print(f"[get_link] Keyword '{keyword}' -> {len(links)} links")
+    print(f"[get_link] Keyword '{keyword}' -> {len(links)} links (filtered)")
     if not links:
-        #add default link to avoid empty 
+        # fallback 1 link mặc định để tránh rỗng hoàn toàn
         links.append("https://www.youtube.com/watch?v=WqQUvfsavO4")
-
     return links
 
 
@@ -137,7 +222,7 @@ def get_dl_link_video(driver, keyword: str, max_results: int = 2) -> List[str]:
 #         sleep(0.5)
 #     return image_links
 
-def get_links_main(keywords_file, output_txt, project_name=None, headless=False):
+def get_links_main(keywords_file, output_txt, project_name=None, headless=False, max_per_keyword: int = 2, max_minutes: Optional[int] = None):
     print("[get_link] === START get_links_main ===")
     print(f"[get_link] keywords_file = {keywords_file}")
     print(f"[get_link] output_txt    = {output_txt}")
@@ -165,7 +250,7 @@ def get_links_main(keywords_file, output_txt, project_name=None, headless=False)
     for idx, keyword in enumerate(keywords, start=1):
         print(f"[get_link] --- ({idx}/{len(keywords)}) '{keyword}' ---")
         try:
-            video_links = get_dl_link_video(driver, keyword)
+            video_links = get_dl_link_video(driver, keyword, max_results=max_per_keyword, max_minutes=max_minutes)
         except Exception as e:
             print(f"[get_link] ERROR collecting links for '{keyword}': {e}")
             video_links = []

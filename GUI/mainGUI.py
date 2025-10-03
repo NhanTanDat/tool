@@ -50,7 +50,8 @@ class AutoToolGUI(tk.Tk):
         self.links_folder_var = tk.StringVar()
         self.regen_links_var = tk.BooleanVar(value=False)
         self.videos_per_keyword_var = tk.StringVar(value="10")
-        self.max_duration_var = tk.StringVar(value="40")
+        self.max_duration_var = tk.StringVar(value="20")  # mặc định tối đa 20 phút
+        self.min_duration_var = tk.StringVar(value="4")   # mặc định tối thiểu 4 phút
 
         self._build_ui()
         try:
@@ -90,6 +91,9 @@ class AutoToolGUI(tk.Tk):
         row += 1
         ttk.Label(frm, text="Thời lượng tối đa (phút):").grid(row=row, column=0, sticky="w", padx=pad, pady=2)
         ttk.Entry(frm, textvariable=self.max_duration_var, width=12).grid(row=row, column=1, sticky="w", padx=pad, pady=2)
+        row += 1
+        ttk.Label(frm, text="Thời lượng tối thiểu (phút):").grid(row=row, column=0, sticky="w", padx=pad, pady=2)
+        ttk.Entry(frm, textvariable=self.min_duration_var, width=12).grid(row=row, column=1, sticky="w", padx=pad, pady=2)
         row += 1
         ttk.Label(frm, text="Thư mục con (tuỳ chọn):").grid(row=row, column=0, sticky="w", padx=pad, pady=2)
         ttk.Entry(frm, textvariable=self.subfolder_var, width=30).grid(row=row, column=1, sticky="w", padx=pad, pady=2)
@@ -325,11 +329,23 @@ class AutoToolGUI(tk.Tk):
                 except Exception:
                     mpk = 10
                 try:
-                    mxm = int(getattr(self, 'max_duration_var', tk.StringVar(value='0')).get().strip() or '0')
+                    mx_max = int(getattr(self, 'max_duration_var', tk.StringVar(value='20')).get().strip() or '20')
                 except Exception:
-                    mxm = 0
-                max_minutes = mxm if mxm > 0 else None
-                get_link.get_links_main(names_txt, links_txt, project_name=safe_project, max_per_keyword=mpk, max_minutes=max_minutes)
+                    mx_max = 20
+                try:
+                    mn_min = int(getattr(self, 'min_duration_var', tk.StringVar(value='4')).get().strip() or '4')
+                except Exception:
+                    mn_min = 4
+                max_minutes = mx_max if mx_max > 0 else None
+                min_minutes = mn_min if mn_min > 0 else None
+                get_link.get_links_main(
+                    names_txt,
+                    links_txt,
+                    project_name=safe_project,
+                    max_per_keyword=mpk,
+                    max_minutes=max_minutes,
+                    min_minutes=min_minutes,
+                )
                 self.log(f"Đã tạo link -> {links_txt}")
             except Exception as e:
                 self.log(f"CẢNH BÁO: Không tạo được link tự động ({e}). Dùng file tên.")

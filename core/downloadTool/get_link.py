@@ -7,6 +7,7 @@ Tính năng:
  - Chuẩn hoá link.
  - Giới hạn số video / keyword (max_per_keyword).
  - Lọc theo thời lượng tối đa (max_minutes) nếu cung cấp.
+ - Lọc theo thời lượng tối thiểu (min_minutes) nếu cung cấp.
 """
 
 from selenium import webdriver
@@ -118,7 +119,14 @@ def _parse_aria_duration(label: str) -> Optional[int]:
     return total if total > 0 else None
 
 
-def get_dl_link_video(driver, keyword: str, max_results: int, max_minutes: Optional[int] = None) -> List[str]:
+def get_dl_link_video(
+    driver,
+    keyword: str,
+    max_results: int,
+    max_minutes: Optional[int] = None,
+    min_minutes: Optional[int] = None,
+    max_scrolls: int = 8,
+) -> List[str]:
     search_url = f"https://www.youtube.com/results?search_query={keyword}".replace(' ', '+')
     print(f"[get_link] Navigate: {search_url}")
     driver.get(search_url)
@@ -127,66 +135,87 @@ def get_dl_link_video(driver, keyword: str, max_results: int, max_minutes: Optio
         WebDriverWait(driver, 20).until(EC.presence_of_element_located((By.ID, 'video-title')))
     except Exception as e:
         print(f"[get_link] WARNING: Timeout loading results for '{keyword}': {e}")
-    # Scroll once to encourage lazy load
-    try:
-        driver.execute_script("window.scrollTo(0, document.documentElement.scrollHeight);")
-        sleep(3)
-    except Exception as e:
-        print(f"[get_link] Scroll error (ignored): {e}")
-
-    elements = driver.find_elements(By.ID, 'video-title')
     want = max_results
     links: List[str] = []
     max_seconds = max_minutes * 60 if max_minutes else None
-    # lấy nhiều hơn để lọc
-    for el in elements[:max_results*4]:
-        if len(links) >= want:
-            break
+    min_seconds = min_minutes * 60 if min_minutes else None
+
+    processed_ids = set()
+    scroll_count = 0
+    num_scroll = 6
+    # Loop scroll until we have enough links or reach scroll cap
+    while len(links) < want and scroll_count <= max_scrolls:
         try:
-            href = _clean_href(el.get_attribute('href'))
-            if not href or href in links:
-                continue
-            dur_seconds = None
-            if max_seconds is not None:
-                # Cấu trúc mới: badge-shape / div.yt-badge-shape__text chứa thời gian
-                try:
-                    container = el.find_element(By.XPATH, '(./ancestor::ytd-video-renderer | ./ancestor::ytd-rich-item-renderer)[1]')
-                except Exception:
-                    container = None
-                if container is not None:
-                    # Thử tìm phần tử có class chứa badge-shape__text
+            elements = driver.find_elements(By.ID, 'video-title')
+        except Exception:
+            elements = []
+        # process newly appeared elements
+        for el in elements:
+            if len(links) >= want:
+                break
+            try:
+                vid_href_raw = el.get_attribute('href')
+                href = _clean_href(vid_href_raw)
+                if not href or href in links:
+                    continue
+                # generate a simple id (video id) to avoid re-processing
+                vid_id = None
+                if 'watch?v=' in href:
+                    vid_id = href.split('watch?v=')[-1].split('&')[0]
+                if vid_id and vid_id in processed_ids:
+                    continue
+                if vid_id:
+                    processed_ids.add(vid_id)
+                dur_seconds = None
+                if max_seconds is not None or min_seconds is not None:
                     try:
-                        time_nodes = container.find_elements(
-                            By.XPATH,
-                            ".//ytd-thumbnail-overlay-time-status-renderer//*[contains(@class,'badge-shape__text') or contains(@class,'yt-badge-shape__text')]"
-                        )
-                        for tn in time_nodes:
-                            raw = (tn.text or '').strip()
-                            if ':' in raw:
-                                dur_seconds = _parse_duration_to_seconds(raw)
-                                if dur_seconds is not None:
-                                    break
+                        container = el.find_element(By.XPATH, '(./ancestor::ytd-video-renderer | ./ancestor::ytd-rich-item-renderer)[1]')
                     except Exception:
-                        pass
-                    # Fallback: aria-label trên badge-shape
-                    if dur_seconds is None:
+                        container = None
+                    if container is not None:
                         try:
-                            badge = container.find_element(By.XPATH, ".//ytd-thumbnail-overlay-time-status-renderer//badge-shape[@aria-label]")
-                            aria = badge.get_attribute('aria-label') or ''
-                            dur_seconds = _parse_aria_duration(aria)
+                            time_nodes = container.find_elements(
+                                By.XPATH,
+                                ".//ytd-thumbnail-overlay-time-status-renderer//*[contains(@class,'badge-shape__text') or contains(@class,'yt-badge-shape__text')]"
+                            )
+                            for tn in time_nodes:
+                                raw = (tn.text or '').strip()
+                                if ':' in raw:
+                                    dur_seconds = _parse_duration_to_seconds(raw)
+                                    if dur_seconds is not None:
+                                        break
                         except Exception:
                             pass
-                # Nếu vẫn không lấy được thời lượng -> bỏ qua để tránh lấy video dài không kiểm soát
-                if dur_seconds is None:
-                    #nếu video là short thì giữ lại
-                    if 'shorts' in href:
-                        links.append(href)
-                    continue
-                if dur_seconds > max_seconds:
-                    continue
-            links.append(href)
-        except Exception:
-            continue
+                        if dur_seconds is None:
+                            try:
+                                badge = container.find_element(By.XPATH, ".//ytd-thumbnail-overlay-time-status-renderer//badge-shape[@aria-label]")
+                                aria = badge.get_attribute('aria-label') or ''
+                                dur_seconds = _parse_aria_duration(aria)
+                            except Exception:
+                                pass
+                    if dur_seconds is None:
+                        continue
+                    if max_seconds is not None and dur_seconds > max_seconds:
+                        continue
+                    if min_seconds is not None and dur_seconds < min_seconds:
+                        continue
+                links.append(href)
+            except Exception:
+                continue
+        if len(links) >= want:
+            break
+        # Scroll further
+        scroll_count += 1
+        if(scroll_count > num_scroll):
+            break
+        try:
+            driver.execute_script("window.scrollTo(0, document.documentElement.scrollHeight);")
+        except Exception as e:
+            print(f"[get_link] Scroll exec error (ignored): {e}")
+            break
+        sleep(1.6 if scroll_count < 3 else 2.2)
+    if len(links) < want:
+        print(f"[get_link] Reached scroll limit ({scroll_count}/{max_scrolls}) with only {len(links)}/{want} links.")
     print(f"[get_link] Keyword '{keyword}' -> {len(links)} links (filtered)")
     if not links:
         # fallback 1 link mặc định để tránh rỗng hoàn toàn
@@ -222,7 +251,15 @@ def get_dl_link_video(driver, keyword: str, max_results: int, max_minutes: Optio
 #         sleep(0.5)
 #     return image_links
 
-def get_links_main(keywords_file, output_txt, project_name=None, headless=False, max_per_keyword: int = 2, max_minutes: Optional[int] = None):
+def get_links_main(
+    keywords_file,
+    output_txt,
+    project_name=None,
+    headless=False,
+    max_per_keyword: int = 2,
+    max_minutes: Optional[int] = None,
+    min_minutes: Optional[int] = None,
+):
     print("[get_link] === START get_links_main ===")
     print(f"[get_link] keywords_file = {keywords_file}")
     print(f"[get_link] output_txt    = {output_txt}")
@@ -250,7 +287,13 @@ def get_links_main(keywords_file, output_txt, project_name=None, headless=False,
     for idx, keyword in enumerate(keywords, start=1):
         print(f"[get_link] --- ({idx}/{len(keywords)}) '{keyword}' ---")
         try:
-            video_links = get_dl_link_video(driver, keyword, max_results=max_per_keyword, max_minutes=max_minutes)
+            video_links = get_dl_link_video(
+                driver,
+                keyword,
+                max_results=max_per_keyword,
+                max_minutes=max_minutes,
+                min_minutes=min_minutes,
+            )
         except Exception as e:
             print(f"[get_link] ERROR collecting links for '{keyword}': {e}")
             video_links = []

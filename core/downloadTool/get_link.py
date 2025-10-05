@@ -246,13 +246,22 @@ def get_dl_link_image(driver, keyword, num_of_image=10):
     search_url = f"https://www.google.com/search?tbm=isch&q={keyword}".replace(' ', '+')
     driver.get(search_url)
     driver.implicitly_wait(10)
-    sleep(3)
+    sleep(2)
 
     # Focus để điều khiển phím
     try:
-        actions = webdriver.ActionChains(driver)
-        body = driver.find_element(By.TAG_NAME, "body")
-        actions.move_to_element_with_offset(body, 50, 50).click().perform()
+        #tìm thẻ div có thuộc tính jsdata thứ 11
+        list_div = driver.find_elements(By.XPATH, '//div[@jsdata]')
+        if list_div:
+            list_div = list_div[10]
+            #get value of jsdata
+            jsdata = list_div.get_attribute('jsdata')
+            value2 = jsdata.split(';')[1]
+            #thay link search_url thành
+            search_url = f"https://www.google.com/search?tbm=isch&q={keyword}#vhid={value2}&vssid=mosaic".replace(' ', '+')
+            driver.get(search_url)
+            driver.implicitly_wait(10)
+            sleep(2)
     except Exception:
         pass
     sleep(1)
@@ -358,7 +367,7 @@ def get_dl_link_image(driver, keyword, num_of_image=10):
                 driver.execute_script('window.scrollBy(0, document.body.scrollHeight);')
             except Exception:
                 break
-            sleep(1.0 if scroll_attempts < 5 else 1.6)
+            sleep(0.5 if scroll_attempts < 5 else 0.8)
 
     return collected[:num_of_image]
 

@@ -46,6 +46,7 @@ class AutoToolGUI(tk.Tk):
         self.project_file_var = tk.StringVar()
         self.version_var = tk.StringVar(value="2024")
         self.download_type_var = tk.StringVar(value="mp4")
+        self.mode_var = tk.StringVar(value="both")  # both | video | image
         self.regen_links_var = tk.BooleanVar(value=False)
         self.videos_per_keyword_var = tk.StringVar(value="10")
         self.images_per_keyword_var = tk.StringVar(value="10")
@@ -79,12 +80,9 @@ class AutoToolGUI(tk.Tk):
         row += 1
         ttk.Label(frm, text="Phiên bản Premiere:").grid(row=row, column=0, sticky="w", padx=pad, pady=2)
         ttk.Combobox(frm, textvariable=self.version_var, values=["2022", "2023", "2024", "2025"], width=12, state="readonly").grid(row=row, column=1, sticky="w", padx=pad, pady=2)
-        # row += 1
-        # ttk.Label(frm, text="Định dạng tải:").grid(row=row, column=0, sticky="w", padx=pad, pady=2)
-        # type_frame = ttk.Frame(frm)
-        # type_frame.grid(row=row, column=1, sticky="w", padx=pad, pady=2)
-        # ttk.Radiobutton(type_frame, text="MP4", value="mp4", variable=self.download_type_var).pack(side="left", padx=(0, 12))
-        # ttk.Radiobutton(type_frame, text="MP3", value="mp3", variable=self.download_type_var).pack(side="left")
+        row += 1
+        ttk.Label(frm, text="Chế độ chạy:").grid(row=row, column=0, sticky="w", padx=pad, pady=2)
+        ttk.Combobox(frm, textvariable=self.mode_var, values=["both", "video", "image"], width=12, state="readonly").grid(row=row, column=1, sticky="w", padx=pad, pady=2)
         row += 1
         ttk.Label(frm, text="Số video / từ khoá:").grid(row=row, column=0, sticky="w", padx=pad, pady=2)
         ttk.Entry(frm, textvariable=self.videos_per_keyword_var, width=12).grid(row=row, column=1, sticky="w", padx=pad, pady=2)
@@ -162,6 +160,7 @@ class AutoToolGUI(tk.Tk):
         proj = self.project_file_var.get().strip()
         version = self.version_var.get().strip()
         dtype = self.download_type_var.get()
+        mode = (self.mode_var.get().strip() if hasattr(self, 'mode_var') else 'both')
 
         ok = True
         if not parent:
@@ -179,7 +178,7 @@ class AutoToolGUI(tk.Tk):
         elif not proj.lower().endswith(".prproj"):
             self.log("CẢNH BÁO: File không có đuôi .prproj.")
 
-        self.log(f"Phiên bản Premiere: {version}; Kiểu tải: {dtype}")
+        self.log(f"Phiên bản Premiere: {version}; Kiểu tải: {dtype}; Chế độ: {mode}")
         if ok:
             self.log("Kiểm tra hợp lệ.")
             messagebox.showinfo("Kiểm tra", "Thông tin hợp lệ (có thể tạo).")
@@ -196,6 +195,7 @@ class AutoToolGUI(tk.Tk):
         proj = self.project_file_var.get().strip()
         version = self.version_var.get().strip()
         dtype = self.download_type_var.get()
+        mode = (self.mode_var.get().strip() if hasattr(self, 'mode_var') else 'both')
         self.log("=== BẮT ĐẦU TỰ ĐỘNG ===")
         # Nếu chưa có parent, mặc định = <thư mục .prproj>/resource và tạo mới nếu cần
         if not parent:
@@ -282,49 +282,32 @@ class AutoToolGUI(tk.Tk):
 
         # 2. Generate links file if missing or stale (> 1h old)
         # Quyết định regen dựa trên override + tuổi file
-        regen = True  # default if file missing
-        force_flag = self.regen_links_var.get()
-        if os.path.isfile(links_txt):
-            if force_flag:  # người dùng ép regenerate
-                self.log("Ép tạo lại file link (user chọn).")
-                regen = True
-            elif force_flag is False:  # reuse nếu tồn tại
-                self.log("Giữ nguyên file link cũ (user chọn).")
-                regen = False
-            else:
-                # fallback logic theo tuổi
-                mtime = os.path.getmtime(links_txt)
-                age = time.time() - mtime
-                if age < 3600:
-                    regen = False
-                    self.log(f"File link còn mới ({age/60:.1f} phút); bỏ qua tạo lại (tự động).")
-                else:
-                    regen = True
-                    self.log(f"File link đã cũ ({age/60:.1f} phút); tạo lại (tự động).")
-        if regen:
+        # Tạo link theo chế độ đã chọn
+        try:
+            # Read parameters
             try:
-                self.log("Đang tạo link YouTube (có thể lâu)...")
-                # Lấy tham số mới (nếu GUI chưa thêm biến, fallback về 2 & None)
-                try:
-                    mpk = int(getattr(self, 'videos_per_keyword_var', tk.StringVar(value='10')).get().strip() or '10')
-                except Exception:
-                    mpk = 10
-                try:
-                    mx_max = int(getattr(self, 'max_duration_var', tk.StringVar(value='20')).get().strip() or '20')
-                except Exception:
-                    mx_max = 20
-                try:
-                    mn_min = int(getattr(self, 'min_duration_var', tk.StringVar(value='4')).get().strip() or '4')
-                except Exception:
-                    mn_min = 4
-                max_minutes = mx_max if mx_max > 0 else None
-                min_minutes = mn_min if mn_min > 0 else None
-                # Lấy số ảnh / keyword từ GUI
-                try:
-                    ipk = int(getattr(self, 'images_per_keyword_var', tk.StringVar(value='10')).get().strip() or '10')
-                except Exception:
-                    ipk = 10
+                mpk = int(getattr(self, 'videos_per_keyword_var', tk.StringVar(value='10')).get().strip() or '10')
+            except Exception:
+                mpk = 10
+            try:
+                mx_max = int(getattr(self, 'max_duration_var', tk.StringVar(value='20')).get().strip() or '20')
+            except Exception:
+                mx_max = 20
+            try:
+                mn_min = int(getattr(self, 'min_duration_var', tk.StringVar(value='4')).get().strip() or '4')
+            except Exception:
+                mn_min = 4
+            max_minutes = mx_max if mx_max > 0 else None
+            min_minutes = mn_min if mn_min > 0 else None
+            try:
+                ipk = int(getattr(self, 'images_per_keyword_var', tk.StringVar(value='10')).get().strip() or '10')
+            except Exception:
+                ipk = 10
 
+            force_flag = self.regen_links_var.get()
+            mode_l = mode.lower()
+            if mode_l == 'both':
+                self.log("Đang tạo link (cả VIDEO và ẢNH)...")
                 get_link.get_links_main(
                     names_txt,
                     links_txt,
@@ -334,25 +317,62 @@ class AutoToolGUI(tk.Tk):
                     min_minutes=min_minutes,
                     images_per_keyword=ipk,
                 )
-                self.log(f"Đã tạo link -> {links_txt}")
-                # File ảnh được `get_link` ghi cùng tên với hậu tố _image.txt
-                if not os.path.isfile(links_img_txt):
-                    # Nếu GUI dùng links_dir=project_dir, file mặc định đã nằm cạnh dl_links.txt
-                    # nhưng vẫn log nhắc
-                    self.log(f"Gợi ý: Links ảnh nằm tại: {links_img_txt}")
-            except Exception as e:
-                self.log(f"CẢNH BÁO: Không tạo được link tự động ({e}). Dùng file tên.")
-                links_txt = names_txt  # fallback (parse will create empty groups)
-        else:
-            self.log(f"Dùng lại file link -> {links_txt}")
-
-        # 3. Run download logic (IMPORTANT: pass links file, not names file)
-        try:
-            down_by_yt.download_main(parent, links_txt, _type=dtype)
-            self.log("Tải xuống xong.")
+                self.log(f"Đã tạo link VIDEO -> {links_txt}")
+                self.log(f"Đã tạo link ẢNH -> {links_img_txt}")
+            elif mode_l == 'video':
+                do_regen = True
+                if os.path.isfile(links_txt) and force_flag is False:
+                    do_regen = False
+                    self.log("Giữ lại link VIDEO hiện có (user chọn)")
+                if do_regen:
+                    self.log("Đang tạo link VIDEO...")
+                    get_link.get_links_main_video(
+                        names_txt,
+                        links_txt,
+                        project_name=safe_project,
+                        max_per_keyword=mpk,
+                        max_minutes=max_minutes,
+                        min_minutes=min_minutes,
+                    )
+            elif mode_l == 'image':
+                do_regen = True
+                if os.path.isfile(links_img_txt) and force_flag is False:
+                    do_regen = False
+                    self.log("Giữ lại link ẢNH hiện có (user chọn)")
+                if do_regen:
+                    self.log("Đang tạo link ẢNH...")
+                    get_link.get_links_main_image(
+                        names_txt,
+                        links_img_txt,
+                        project_name=safe_project,
+                        images_per_keyword=ipk,
+                    )
         except Exception as e:
-            self.log(f"LỖI khi tải: {e}")
-            return
+            self.log(f"CẢNH BÁO: Không tạo được link ({e}).")
+
+        # 3. Run download logic theo chế độ
+        mode_l = (mode.lower() if isinstance(mode, str) else 'both')
+        if mode_l in ('both', 'video'):
+            try:
+                down_by_yt.download_main(parent, links_txt, _type=dtype)
+                self.log("Tải VIDEO xong.")
+            except Exception as e:
+                self.log(f"LỖI khi tải VIDEO: {e}")
+                return
+        if mode_l in ('both', 'image'):
+            # Import downImage lazily to download images
+            try:
+                import importlib
+                down_image = importlib.import_module("core.downloadTool.downImage")
+            except Exception as e:
+                self.log(f"LỖI: Không thể import downImage: {e}")
+                return
+            try:
+                attempted = down_image.download_images_main(parent, links_img_txt)
+                self.log(f"Đã gửi tải {attempted} ảnh. Xem kết quả trong các thư mục *_img tại: {parent}")
+            except Exception as e:
+                self.log(f"LỖI khi tải ẢNH: {e}")
+                return
 
         # Nhật ký tổng kết
         self.log(f"Project: {proj}")

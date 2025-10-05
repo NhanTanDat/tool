@@ -44,7 +44,7 @@ class AutoToolGUI(tk.Tk):
 
         self.parent_folder_var = tk.StringVar()
         self.project_file_var = tk.StringVar()
-        self.version_var = tk.StringVar(value="2024")
+        self.version_var = tk.StringVar(value="2022")
         self.download_type_var = tk.StringVar(value="mp4")
         self.mode_var = tk.StringVar(value="both")  # both | video | image
         self.regen_links_var = tk.BooleanVar(value=False)
@@ -52,6 +52,8 @@ class AutoToolGUI(tk.Tk):
         self.images_per_keyword_var = tk.StringVar(value="10")
         self.max_duration_var = tk.StringVar(value="20")  # mặc định tối đa 20 phút
         self.min_duration_var = tk.StringVar(value="4")   # mặc định tối thiểu 4 phút
+        # Batch projects list
+        self.batch_projects: list[str] = []
 
         self._build_ui()
         try:
@@ -66,7 +68,16 @@ class AutoToolGUI(tk.Tk):
 
     def _build_ui(self):
         pad = 8
-        frm = ttk.Frame(self, padding=10)
+        # Notebook with two tabs: Single and Batch
+        notebook = ttk.Notebook(self)
+        notebook.pack(fill="both", expand=True)
+        tab_single = ttk.Frame(notebook)
+        tab_batch = ttk.Frame(notebook)
+        notebook.add(tab_single, text="Đơn lẻ")
+        notebook.add(tab_batch, text="Nhiều project")
+
+        # --- Single tab content ---
+        frm = ttk.Frame(tab_single, padding=10)
         frm.pack(fill="both", expand=True)
         row = 0
         # Đưa chọn file .prproj lên đầu
@@ -111,6 +122,45 @@ class AutoToolGUI(tk.Tk):
         scroll.grid(row=row, column=3, sticky="ns", pady=(12, 2))
         self.log_text.configure(yscrollcommand=scroll.set)
         frm.columnconfigure(1, weight=1)
+
+        # --- Batch tab content ---
+        bpad = 8
+        bfrm = ttk.Frame(tab_batch, padding=10)
+        bfrm.pack(fill="both", expand=True)
+        brow = 0
+        ttk.Label(bfrm, text="Chọn nhiều file Premiere (.prproj):").grid(row=brow, column=0, sticky="w", padx=bpad, pady=(bpad, 2))
+        ttk.Button(bfrm, text="Thêm file...", command=self.add_batch_projects).grid(row=brow, column=1, sticky="w", padx=bpad, pady=(bpad, 2))
+        ttk.Button(bfrm, text="Xoá đã chọn", command=self.remove_selected_batch).grid(row=brow, column=2, sticky="w", padx=bpad, pady=(bpad, 2))
+        brow += 1
+        self.batch_list = tk.Listbox(bfrm, height=10, selectmode="extended")
+        self.batch_list.grid(row=brow, column=0, columnspan=3, sticky="nsew", padx=bpad, pady=(2, 6))
+        bscroll = ttk.Scrollbar(bfrm, orient="vertical", command=self.batch_list.yview)
+        bscroll.grid(row=brow, column=3, sticky="ns", pady=(2, 6))
+        self.batch_list.configure(yscrollcommand=bscroll.set)
+        bfrm.columnconfigure(0, weight=1)
+        brow += 1
+        # Batch configuration (same controls as Single tab, shared variables)
+        ttk.Label(bfrm, text="Cấu hình chạy hàng loạt:").grid(row=brow, column=0, sticky="w", padx=bpad, pady=(8, 4))
+        brow += 1
+        ttk.Label(bfrm, text="Phiên bản Premiere:").grid(row=brow, column=0, sticky="w", padx=bpad, pady=2)
+        ttk.Combobox(bfrm, textvariable=self.version_var, values=["2022", "2023", "2024", "2025"], width=12, state="readonly").grid(row=brow, column=1, sticky="w", padx=bpad, pady=2)
+        brow += 1
+        ttk.Label(bfrm, text="Chế độ chạy:").grid(row=brow, column=0, sticky="w", padx=bpad, pady=2)
+        ttk.Combobox(bfrm, textvariable=self.mode_var, values=["both", "video", "image"], width=12, state="readonly").grid(row=brow, column=1, sticky="w", padx=bpad, pady=2)
+        brow += 1
+        ttk.Label(bfrm, text="Số video / từ khoá:").grid(row=brow, column=0, sticky="w", padx=bpad, pady=2)
+        ttk.Entry(bfrm, textvariable=self.videos_per_keyword_var, width=12).grid(row=brow, column=1, sticky="w", padx=bpad, pady=2)
+        brow += 1
+        ttk.Label(bfrm, text="Số ảnh / từ khoá:").grid(row=brow, column=0, sticky="w", padx=bpad, pady=2)
+        ttk.Entry(bfrm, textvariable=self.images_per_keyword_var, width=12).grid(row=brow, column=1, sticky="w", padx=bpad, pady=2)
+        brow += 1
+        ttk.Label(bfrm, text="Thời lượng tối đa (phút):").grid(row=brow, column=0, sticky="w", padx=bpad, pady=2)
+        ttk.Entry(bfrm, textvariable=self.max_duration_var, width=12).grid(row=brow, column=1, sticky="w", padx=bpad, pady=2)
+        brow += 1
+        ttk.Label(bfrm, text="Thời lượng tối thiểu (phút):").grid(row=brow, column=0, sticky="w", padx=bpad, pady=2)
+        ttk.Entry(bfrm, textvariable=self.min_duration_var, width=12).grid(row=brow, column=1, sticky="w", padx=bpad, pady=2)
+        brow += 1
+        ttk.Button(bfrm, text="Chạy hàng loạt", command=self.run_batch_automation).grid(row=brow, column=0, sticky="w", padx=bpad, pady=(10, 6))
 
     # ------------------------------------------------------------------
     # Utility methods
@@ -380,6 +430,66 @@ class AutoToolGUI(tk.Tk):
         self.log(f"Định dạng tải: {dtype}")
         self.log("Hoàn tất quy trình.")
         self.log("=== KẾT THÚC TỰ ĐỘNG ===")
+
+    # ------------------------------------------------------------------
+    # Batch helpers
+    # ------------------------------------------------------------------
+    def add_batch_projects(self):
+        files = filedialog.askopenfilenames(title="Chọn nhiều file .prproj", filetypes=[("Premiere Project", "*.prproj"), ("All files", "*.*")])
+        if not files:
+            return
+        added = 0
+        for f in files:
+            if f not in self.batch_projects:
+                self.batch_projects.append(f)
+                self.batch_list.insert("end", f)
+                added += 1
+        self.log(f"Đã thêm {added} project vào danh sách batch.")
+
+    def remove_selected_batch(self):
+        sel = list(self.batch_list.curselection())
+        if not sel:
+            return
+        sel.reverse()
+        for idx in sel:
+            try:
+                path = self.batch_list.get(idx)
+            except Exception:
+                path = None
+            try:
+                self.batch_list.delete(idx)
+            except Exception:
+                pass
+            if path and path in self.batch_projects:
+                try:
+                    self.batch_projects.remove(path)
+                except Exception:
+                    pass
+        self.log("Đã xoá mục đã chọn khỏi danh sách batch.")
+
+    def run_batch_automation(self):
+        if not self.batch_projects:
+            messagebox.showwarning("Batch", "Chưa có file .prproj nào trong danh sách.")
+            return
+        self.log(f"=== BẮT ĐẦU CHẠY HÀNG LOẠT ({len(self.batch_projects)} project) ===")
+        for i, proj_path in enumerate(self.batch_projects, start=1):
+            try:
+                self.log(f"-- ({i}/{len(self.batch_projects)}) {proj_path}")
+                # Set current project and default resource folder
+                self.project_file_var.set(proj_path)
+                proj_dir = os.path.dirname(os.path.abspath(proj_path))
+                resource_dir = os.path.join(proj_dir, 'resource')
+                try:
+                    os.makedirs(resource_dir, exist_ok=True)
+                except Exception:
+                    pass
+                self.parent_folder_var.set(resource_dir)
+                # Run automation for each project
+                self.run_automation()
+                self.update()
+            except Exception as e:
+                self.log(f"LỖI batch item: {e}")
+        self.log("=== KẾT THÚC CHẠY HÀNG LOẠT ===")
 
     def run_download_images(self):
         parent = self.parent_folder_var.get().strip()

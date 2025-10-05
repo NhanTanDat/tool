@@ -50,6 +50,7 @@ class AutoToolGUI(tk.Tk):
         self.links_folder_var = tk.StringVar()
         self.regen_links_var = tk.BooleanVar(value=False)
         self.videos_per_keyword_var = tk.StringVar(value="10")
+        self.images_per_keyword_var = tk.StringVar(value="10")
         self.max_duration_var = tk.StringVar(value="20")  # mặc định tối đa 20 phút
         self.min_duration_var = tk.StringVar(value="4")   # mặc định tối thiểu 4 phút
 
@@ -89,6 +90,9 @@ class AutoToolGUI(tk.Tk):
         ttk.Label(frm, text="Số video / từ khoá:").grid(row=row, column=0, sticky="w", padx=pad, pady=2)
         ttk.Entry(frm, textvariable=self.videos_per_keyword_var, width=12).grid(row=row, column=1, sticky="w", padx=pad, pady=2)
         row += 1
+        ttk.Label(frm, text="Số ảnh / từ khoá:").grid(row=row, column=0, sticky="w", padx=pad, pady=2)
+        ttk.Entry(frm, textvariable=self.images_per_keyword_var, width=12).grid(row=row, column=1, sticky="w", padx=pad, pady=2)
+        row += 1
         ttk.Label(frm, text="Thời lượng tối đa (phút):").grid(row=row, column=0, sticky="w", padx=pad, pady=2)
         ttk.Entry(frm, textvariable=self.max_duration_var, width=12).grid(row=row, column=1, sticky="w", padx=pad, pady=2)
         row += 1
@@ -107,6 +111,7 @@ class AutoToolGUI(tk.Tk):
         ttk.Button(btn_frame, text="Kiểm tra", command=self.validate_inputs).pack(side="left", padx=(0, 6))
         ttk.Button(btn_frame, text="Tạo thư mục", command=self.create_subfolder).pack(side="left", padx=6)
         ttk.Button(btn_frame, text="Chạy tự động", command=self.run_automation).pack(side="left", padx=6)
+        ttk.Button(btn_frame, text="Download Image", command=self.run_download_images).pack(side="left", padx=6)
         ttk.Button(btn_frame, text="Trạng thái link", command=self.open_links_status_window).pack(side="left", padx=6)
         ttk.Button(btn_frame, text="Xoá log", command=self.clear_log).pack(side="left", padx=6)
         row += 1
@@ -282,7 +287,8 @@ class AutoToolGUI(tk.Tk):
         # Nếu người dùng không chọn custom links dir, ta dùng thư mục project trong data
         if links_dir == DATA_DIR:
             links_dir = data_project_dir
-        links_txt = os.path.join(links_dir, "dl_links.txt")       # list of grouped links generated
+        links_txt = os.path.join(links_dir, "dl_links.txt")       # list of grouped video links
+        links_img_txt = os.path.join(links_dir, "dl_links_image.txt")  # list of grouped image links
 
         # 1. Extract names
         try:
@@ -338,6 +344,12 @@ class AutoToolGUI(tk.Tk):
                     mn_min = 4
                 max_minutes = mx_max if mx_max > 0 else None
                 min_minutes = mn_min if mn_min > 0 else None
+                # Lấy số ảnh / keyword từ GUI
+                try:
+                    ipk = int(getattr(self, 'images_per_keyword_var', tk.StringVar(value='10')).get().strip() or '10')
+                except Exception:
+                    ipk = 10
+
                 get_link.get_links_main(
                     names_txt,
                     links_txt,
@@ -345,8 +357,14 @@ class AutoToolGUI(tk.Tk):
                     max_per_keyword=mpk,
                     max_minutes=max_minutes,
                     min_minutes=min_minutes,
+                    images_per_keyword=ipk,
                 )
                 self.log(f"Đã tạo link -> {links_txt}")
+                # File ảnh được `get_link` ghi cùng tên với hậu tố _image.txt
+                if not os.path.isfile(links_img_txt):
+                    # Nếu GUI dùng links_dir=project_dir, file mặc định đã nằm cạnh dl_links.txt
+                    # nhưng vẫn log nhắc
+                    self.log(f"Gợi ý: Links ảnh nằm tại: {links_img_txt}")
             except Exception as e:
                 self.log(f"CẢNH BÁO: Không tạo được link tự động ({e}). Dùng file tên.")
                 links_txt = names_txt  # fallback (parse will create empty groups)
@@ -368,6 +386,42 @@ class AutoToolGUI(tk.Tk):
         self.log("Hoàn tất quy trình.")
         self.log("=== KẾT THÚC TỰ ĐỘNG ===")
 
+    def run_download_images(self):
+        parent = self.parent_folder_var.get().strip()
+        proj = self.project_file_var.get().strip()
+        if not parent:
+            self.log("LỖI: Chưa nhập thư mục chứa nội dung.")
+            return
+        if not os.path.isdir(parent):
+            try:
+                os.makedirs(parent, exist_ok=True)
+                self.log(f"Đã tạo thư mục chứa nội dung: {parent}")
+            except Exception as e:
+                self.log(f"LỖI: Không tạo được thư mục cha: {e}")
+                return
+        if not proj:
+            self.log("LỖI: Chưa chọn file .prproj để xác định thư mục project trong data.")
+            return
+        safe_project = self._derive_project_slug(proj)
+        links_dir = os.path.join(DATA_DIR, safe_project)
+        links_img_txt = os.path.join(links_dir, "dl_links_image.txt")
+        if not os.path.isfile(links_img_txt):
+            self.log(f"LỖI: Không tìm thấy file link ảnh: {links_img_txt}")
+            self.log("Hãy chạy 'Chạy tự động' để tạo link trước hoặc kiểm tra thư mục link tuỳ chọn.")
+            return
+        # Import downImage lazily
+        try:
+            import importlib
+            down_image = importlib.import_module("core.downloadTool.downImage")
+        except Exception as e:
+            self.log(f"LỖI: Không thể import downImage: {e}")
+            return
+        try:
+            attempted = down_image.download_images_main(parent, links_img_txt)
+            self.log(f"Đã gửi tải {attempted} ảnh. Xem kết quả trong các thư mục *_img tại: {parent}")
+        except Exception as e:
+            self.log(f"LỖI khi tải ảnh: {e}")
+
     # --------------------------------------------------------------
     # Helper: derive project slug (shared between main & status window)
     # --------------------------------------------------------------
@@ -375,7 +429,6 @@ class AutoToolGUI(tk.Tk):
         project_filename = os.path.basename(proj_path)
         stem, _ = os.path.splitext(project_filename)
         return ''.join(ch if ch.isalnum() or ch in ('-', '_') else '_' for ch in stem)
-
     # --------------------------------------------------------------
     # Links status window
     # --------------------------------------------------------------

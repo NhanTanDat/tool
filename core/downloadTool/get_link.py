@@ -365,6 +365,7 @@ def get_links_main(
     max_per_keyword: int = 2,
     max_minutes: Optional[int] = None,
     min_minutes: Optional[int] = None,
+    images_per_keyword: int = 10,
 ):
     print("[get_link] === START get_links_main ===")
     print(f"[get_link] keywords_file = {keywords_file}")
@@ -403,7 +404,9 @@ def get_links_main(
                 max_minutes=max_minutes,
                 min_minutes=min_minutes,
             )
-            image_links = get_dl_link_image(driver, keyword, num_of_image=10)
+            # số ảnh mỗi keyword do GUI truyền xuống (mặc định 10)
+            img_count = images_per_keyword if images_per_keyword and images_per_keyword > 0 else 10
+            image_links = get_dl_link_image(driver, keyword, num_of_image=img_count)
         except Exception as e:
             print(f"[get_link] ERROR collecting links for '{keyword}': {e}")
             video_links = []

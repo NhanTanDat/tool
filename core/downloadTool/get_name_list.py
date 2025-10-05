@@ -7,6 +7,20 @@ import gzip
 import os
 import xml.etree.ElementTree as ET
 
+import re
+
+def _sanitize_keyword(name: str) -> str:
+    """Remove special characters from keyword before adding to list."""
+    if not isinstance(name, str):
+        name = str(name)
+    # remove control characters
+    name = ''.join(ch for ch in name if ord(ch) >= 32)
+    # remove straight + curly quotes
+    name = re.sub(r'[\"\'“”‘’]', '', name)
+    # collapse whitespace and trim
+    name = ' '.join(name.split()).strip()
+    return name
+
 def _read_prproj_xml(path: str) -> ET.Element:
     with gzip.open(path, "rb") as f:
         xml_data = f.read().decode("utf-8", errors="replace")
@@ -68,6 +82,9 @@ def extract_text_instances_with_timing(path: str, save_txt: str = "list_names.tx
         if inst is None or not inst.text:
             continue
         name = inst.text.strip()
+        name = _sanitize_keyword(name)
+        if not name:
+            continue
         # Lần lên ClipItem gần nhất
         current = comp
         clip_item = None
@@ -120,7 +137,7 @@ def extract_instance_names(path, save_txt=None, project_name=None):
         with open(save_txt, "w", encoding="utf-8") as f:
             for n in names:
                 #nếu n không bắt đầu bằng 1 kí tự đơn lẻ + " " thì ghi vào file vis dụ: "A bcd" thì bỏ
-                if(n[0].isalpha() and n[1] == " "):
+                if (len(n) >= 2 and n[0].isalpha() and n[1] == " "):
                     continue
                 else:
                     f.write(n + "\n")

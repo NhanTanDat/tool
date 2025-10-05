@@ -19,6 +19,7 @@ from time import sleep
 from typing import List, Optional
 import re
 import os
+from pywinauto.keyboard import send_keys
 
 
 def init_driver(headless: bool = False):
@@ -224,32 +225,137 @@ def get_dl_link_video(
 
 
 
-# def get_dl_link_image(driver, keyword, num_of_image=10):
-#     #find in google image
-#     #mở to cửa sổ trình duyệt
-#     driver.maximize_window()
+def get_dl_link_image(driver, keyword, num_of_image=10):
+    """Lấy danh sách link ảnh từ Google Images với các cải tiến:
+    - Giữ thao tác phím RIGHT như bản gốc (di chuyển qua từng ảnh).
+    - Loại bỏ ảnh có link bảo vệ: data:image/*, encrypted-tbn (thumbnail preview của Google).
+    - Loại bỏ ảnh mờ / quá nhỏ theo kích thước hiển thị (naturalWidth/Height < 50).
+    - Loại bỏ ảnh < 10KB nếu lấy được Content-Length (dùng requests nếu có, fallback bỏ qua kiểm tra này nếu không có).
+    - Tự động scroll nếu chưa thu đủ số ảnh.
+    """
+    try:
+        driver.maximize_window()
+    except Exception:
+        pass
 
-#     search_url = f"https://www.google.com/search?tbm=isch&q={keyword}"
-#     driver.get(search_url)
-#     driver.implicitly_wait(10)
-#     sleep(4)
+    search_url = f"https://www.google.com/search?tbm=isch&q={keyword}".replace(' ', '+')
+    driver.get(search_url)
+    driver.implicitly_wait(10)
+    sleep(3)
 
-#     actions = webdriver.ActionChains(driver)
-#     body = driver.find_element(By.TAG_NAME, "body")
-#     actions.move_to_element_with_offset(body, 50, 50).click().perform()
-#     sleep(5)
+    # Focus để điều khiển phím
+    try:
+        actions = webdriver.ActionChains(driver)
+        body = driver.find_element(By.TAG_NAME, "body")
+        actions.move_to_element_with_offset(body, 50, 50).click().perform()
+    except Exception:
+        pass
+    sleep(1)
 
-#     send_keys('{LEFT} {LEFT} {LEFT} {LEFT} {LEFT} {LEFT} {LEFT} {LEFT} {LEFT} {LEFT} {LEFT} {LEFT} {LEFT} {LEFT} {LEFT} {LEFT}')
-#     image_links = []
-#     #lấy link ảnh: thẻ a, rel = "noopener", target="_blank"
-#     for i in range(num_of_image):
-#         image_element = driver.find_elements(By.XPATH, '//a[@rel="noopener" and @target="_blank"]')[0]
-#         img_tag = image_element.find_element(By.TAG_NAME, 'img')
-#         img_src = img_tag.get_attribute('src')
-#         image_links.append(img_src)
-#         send_keys('{RIGHT}')
-#         sleep(0.5)
-#     return image_links
+    # Đưa selection về bên trái như logic cũ
+    send_keys('{LEFT} {LEFT} {LEFT} {LEFT} {LEFT} {LEFT} {LEFT} {LEFT} {LEFT} {LEFT} {LEFT} {LEFT} {LEFT} {LEFT} {LEFT} {LEFT}')
+
+    # Tham số
+    MIN_DIMENSION = 50  # tránh icon nhỏ / blur
+    MIN_FILE_KB = 10
+    MAX_SCROLL_ATTEMPTS = 20
+    collected = []
+    seen = set()
+    scroll_attempts = 0
+    right_moves = 0
+
+    # Thử import requests để kiểm tra Content-Length
+    try:
+        import requests  # type: ignore
+        _has_requests = True
+    except Exception:
+        _has_requests = False
+
+    def is_protected(src: str) -> bool:
+        if not src:
+            return True
+        if src.startswith('data:image/') or 'static.' in src or 'resizing.' in src:  # tránh ảnh tĩnh (icon, logo)
+            return True
+        if 'encrypted' in src:  # thumbnail preview
+            return True
+        return False
+
+    def file_size_ok(src: str) -> bool:
+        if not _has_requests:
+            return True  # không kiểm tra nếu thiếu thư viện
+        if not src.lower().startswith(('http://', 'https://')):
+            return True
+        try:
+            head = requests.head(src, timeout=5, allow_redirects=True)
+            cl = head.headers.get('Content-Length')
+            if cl and cl.isdigit():
+                return int(cl) >= MIN_FILE_KB * 1024
+        except Exception:
+            return True  # nếu lỗi HEAD thì bỏ qua lọc này
+        return True
+
+    while len(collected) < num_of_image and scroll_attempts <= MAX_SCROLL_ATTEMPTS:
+        try:
+            anchors = driver.find_elements(By.XPATH, '//a[@rel="noopener" and @target="_blank"]')
+        except Exception:
+            anchors = []
+        if not anchors:
+            # nếu không còn anchor, scroll thử
+            scroll_attempts += 1
+            try:
+                driver.execute_script('window.scrollBy(0, document.body.scrollHeight);')
+            except Exception:
+                break
+            sleep(1.2)
+            continue
+
+        # Lấy anchor đầu tiên (giống logic gốc) - giả định phím RIGHT sẽ thay đổi "focus" ảnh hiển thị đầu danh sách / vùng hiển thị
+        try:
+            image_element = anchors[1]
+            img_tag = image_element.find_elements(By.TAG_NAME, 'img')[0]
+            img_src = img_tag.get_attribute('src') or ''
+        except Exception:
+            img_src = ''
+
+        accept = True
+        if not img_src:
+            accept = False
+        if accept and is_protected(img_src):
+            accept = False
+
+        # Kiểm tra dimension
+        if accept:
+            try:
+                w = int(img_tag.get_attribute('naturalWidth') or 0)
+                h = int(img_tag.get_attribute('naturalHeight') or 0)
+            except Exception:
+                w = h = 0
+            if w < MIN_DIMENSION or h < MIN_DIMENSION:
+                accept = False
+
+        # Kiểm tra kích thước file HEAD (nếu có)
+        if accept and not file_size_ok(img_src):
+            accept = False
+
+        if accept and img_src not in seen:
+            seen.add(img_src)
+            collected.append(img_src)
+
+        # Di chuyển sang ảnh kế (giữ nguyên thao tác RIGHT như yêu cầu)
+        send_keys('{RIGHT}')
+        right_moves += 1
+        sleep(0.45)
+
+        # Thỉnh thoảng scroll để load thêm (ví dụ mỗi 8 lần di chuyển)
+        if len(collected) < num_of_image and right_moves % 8 == 0:
+            scroll_attempts += 1
+            try:
+                driver.execute_script('window.scrollBy(0, document.body.scrollHeight);')
+            except Exception:
+                break
+            sleep(1.0 if scroll_attempts < 5 else 1.6)
+
+    return collected[:num_of_image]
 
 def get_links_main(
     keywords_file,
@@ -273,11 +379,14 @@ def get_links_main(
 
     driver = init_driver(headless=headless)
     txt_name = output_txt
+    txt_name_image = output_txt.replace('.txt', '_image.txt')
     stt = 0
     num_vd = 0
     # clear file at start
     try:
         with open(txt_name, 'w', encoding='utf-8') as f:
+            f.write('')
+        with open(txt_name_image, 'w', encoding='utf-8') as f:
             f.write('')
     except Exception as e:
         print(f"[get_link] ERROR: cannot clear output file: {e}")
@@ -294,9 +403,11 @@ def get_links_main(
                 max_minutes=max_minutes,
                 min_minutes=min_minutes,
             )
+            image_links = get_dl_link_image(driver, keyword, num_of_image=10)
         except Exception as e:
             print(f"[get_link] ERROR collecting links for '{keyword}': {e}")
             video_links = []
+            image_links = []
 
         stt += 1
         try:
@@ -304,6 +415,11 @@ def get_links_main(
                 f.write(f"{stt} {keyword}\n")
                 for link in video_links:
                     num_vd += 1
+                    f.write(f"{link}\n")
+
+            with open(txt_name_image, 'a', encoding='utf-8') as f:
+                f.write(f"{stt} {keyword}\n")
+                for link in image_links:
                     f.write(f"{link}\n")
         except Exception as e:
             print(f"[get_link] ERROR writing links for '{keyword}': {e}")

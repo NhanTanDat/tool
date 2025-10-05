@@ -45,9 +45,7 @@ class AutoToolGUI(tk.Tk):
         self.parent_folder_var = tk.StringVar()
         self.project_file_var = tk.StringVar()
         self.version_var = tk.StringVar(value="2024")
-        self.subfolder_var = tk.StringVar()
         self.download_type_var = tk.StringVar(value="mp4")
-        self.links_folder_var = tk.StringVar()
         self.regen_links_var = tk.BooleanVar(value=False)
         self.videos_per_keyword_var = tk.StringVar(value="10")
         self.images_per_keyword_var = tk.StringVar(value="10")
@@ -70,22 +68,23 @@ class AutoToolGUI(tk.Tk):
         frm = ttk.Frame(self, padding=10)
         frm.pack(fill="both", expand=True)
         row = 0
-        ttk.Label(frm, text="Thư mục chứa video:").grid(row=row, column=0, sticky="w", padx=pad, pady=(pad, 2))
-        ttk.Entry(frm, textvariable=self.parent_folder_var, width=54).grid(row=row, column=1, sticky="w", padx=pad, pady=(pad, 2))
-        ttk.Button(frm, text="Chọn", command=self.browse_parent).grid(row=row, column=2, padx=pad, pady=(pad, 2))
+        # Đưa chọn file .prproj lên đầu
+        ttk.Label(frm, text="File Premiere (.prproj):").grid(row=row, column=0, sticky="w", padx=pad, pady=(pad, 2))
+        ttk.Entry(frm, textvariable=self.project_file_var, width=54).grid(row=row, column=1, sticky="w", padx=pad, pady=(pad, 2))
+        ttk.Button(frm, text="Chọn", command=self.browse_project).grid(row=row, column=2, padx=pad, pady=(pad, 2))
         row += 1
-        ttk.Label(frm, text="File Premiere (.prproj):").grid(row=row, column=0, sticky="w", padx=pad, pady=2)
-        ttk.Entry(frm, textvariable=self.project_file_var, width=54).grid(row=row, column=1, sticky="w", padx=pad, pady=2)
-        ttk.Button(frm, text="Chọn", command=self.browse_project).grid(row=row, column=2, padx=pad, pady=2)
+        ttk.Label(frm, text="Thư mục chứa nội dung (video/ảnh):").grid(row=row, column=0, sticky="w", padx=pad, pady=2)
+        ttk.Entry(frm, textvariable=self.parent_folder_var, width=54).grid(row=row, column=1, sticky="w", padx=pad, pady=2)
+        ttk.Button(frm, text="Chọn", command=self.browse_parent).grid(row=row, column=2, padx=pad, pady=2)
         row += 1
         ttk.Label(frm, text="Phiên bản Premiere:").grid(row=row, column=0, sticky="w", padx=pad, pady=2)
         ttk.Combobox(frm, textvariable=self.version_var, values=["2022", "2023", "2024", "2025"], width=12, state="readonly").grid(row=row, column=1, sticky="w", padx=pad, pady=2)
-        row += 1
-        ttk.Label(frm, text="Định dạng tải:").grid(row=row, column=0, sticky="w", padx=pad, pady=2)
-        type_frame = ttk.Frame(frm)
-        type_frame.grid(row=row, column=1, sticky="w", padx=pad, pady=2)
-        ttk.Radiobutton(type_frame, text="MP4", value="mp4", variable=self.download_type_var).pack(side="left", padx=(0, 12))
-        ttk.Radiobutton(type_frame, text="MP3", value="mp3", variable=self.download_type_var).pack(side="left")
+        # row += 1
+        # ttk.Label(frm, text="Định dạng tải:").grid(row=row, column=0, sticky="w", padx=pad, pady=2)
+        # type_frame = ttk.Frame(frm)
+        # type_frame.grid(row=row, column=1, sticky="w", padx=pad, pady=2)
+        # ttk.Radiobutton(type_frame, text="MP4", value="mp4", variable=self.download_type_var).pack(side="left", padx=(0, 12))
+        # ttk.Radiobutton(type_frame, text="MP3", value="mp3", variable=self.download_type_var).pack(side="left")
         row += 1
         ttk.Label(frm, text="Số video / từ khoá:").grid(row=row, column=0, sticky="w", padx=pad, pady=2)
         ttk.Entry(frm, textvariable=self.videos_per_keyword_var, width=12).grid(row=row, column=1, sticky="w", padx=pad, pady=2)
@@ -99,17 +98,9 @@ class AutoToolGUI(tk.Tk):
         ttk.Label(frm, text="Thời lượng tối thiểu (phút):").grid(row=row, column=0, sticky="w", padx=pad, pady=2)
         ttk.Entry(frm, textvariable=self.min_duration_var, width=12).grid(row=row, column=1, sticky="w", padx=pad, pady=2)
         row += 1
-        ttk.Label(frm, text="Thư mục con (tuỳ chọn):").grid(row=row, column=0, sticky="w", padx=pad, pady=2)
-        ttk.Entry(frm, textvariable=self.subfolder_var, width=30).grid(row=row, column=1, sticky="w", padx=pad, pady=2)
-        row += 1
-        ttk.Label(frm, text="Thư mục lưu link (tuỳ chọn):").grid(row=row, column=0, sticky="w", padx=pad, pady=2)
-        ttk.Entry(frm, textvariable=self.links_folder_var, width=54).grid(row=row, column=1, sticky="w", padx=pad, pady=2)
-        ttk.Button(frm, text="Chọn", command=self.browse_links_folder).grid(row=row, column=2, padx=pad, pady=2)
-        row += 1
         btn_frame = ttk.Frame(frm)
         btn_frame.grid(row=row, column=0, columnspan=3, sticky="w", padx=pad, pady=(12, 4))
         ttk.Button(btn_frame, text="Kiểm tra", command=self.validate_inputs).pack(side="left", padx=(0, 6))
-        ttk.Button(btn_frame, text="Tạo thư mục", command=self.create_subfolder).pack(side="left", padx=6)
         ttk.Button(btn_frame, text="Chạy tự động", command=self.run_automation).pack(side="left", padx=6)
         ttk.Button(btn_frame, text="Download Image", command=self.run_download_images).pack(side="left", padx=6)
         ttk.Button(btn_frame, text="Trạng thái link", command=self.open_links_status_window).pack(side="left", padx=6)
@@ -151,12 +142,17 @@ class AutoToolGUI(tk.Tk):
         if f:
             self.project_file_var.set(f)
             self.log(f"Selected project file: {f}")
+            # Đặt mặc định thư mục chứa nội dung = <thư mục .prproj>/resource nếu người dùng chưa chọn
+            proj_dir = os.path.dirname(os.path.abspath(f))
+            resource_dir = os.path.join(proj_dir, 'resource')
+            try:
+                os.makedirs(resource_dir, exist_ok=True)
+                self.log(f"Đảm bảo thư mục resource: {resource_dir}")
+            except Exception as e:
+                self.log(f"CẢNH BÁO: Không tạo được thư mục resource mặc định ({e})")
+            self.parent_folder_var.set(resource_dir)
 
-    def browse_links_folder(self):
-        path = filedialog.askdirectory(title="Select Links Output Folder")
-        if path:
-            self.links_folder_var.set(path)
-            self.log(f"Selected links output folder: {path}")
+    # (Đã loại bỏ input 'Thư mục lưu link')
 
     # ------------------------------------------------------------------
     # Validation & folder ops
@@ -190,23 +186,7 @@ class AutoToolGUI(tk.Tk):
         else:
             messagebox.showerror("Kiểm tra", "Không hợp lệ. Xem log.")
 
-    def create_subfolder(self):
-        parent = self.parent_folder_var.get().strip()
-        sub = self.subfolder_var.get().strip()
-        if not parent:
-            self.log("ERROR: Parent folder empty.")
-            return
-        if not sub:
-            self.log("ERROR: Subfolder name empty.")
-            return
-        try:
-            if not os.path.isdir(parent):
-                os.makedirs(parent, exist_ok=True)
-                self.log(f"Created parent folder: {parent}")
-            create_folder(parent, sub)
-            self.log(f"Subfolder ensured: {os.path.join(parent, sub)}")
-        except Exception as e:
-            self.log(f"ERROR creating subfolder: {e}")
+    # (Đã loại bỏ input 'Thư mục con' và nút tạo thư mục)
 
     # ------------------------------------------------------------------
     # Automation placeholder
@@ -217,13 +197,24 @@ class AutoToolGUI(tk.Tk):
         version = self.version_var.get().strip()
         dtype = self.download_type_var.get()
         self.log("=== BẮT ĐẦU TỰ ĐỘNG ===")
+        # Nếu chưa có parent, mặc định = <thư mục .prproj>/resource và tạo mới nếu cần
         if not parent:
-            self.log("LỖI: Chưa nhập thư mục chứa video.")
-            return
+            if not proj:
+                self.log("LỖI: Chưa nhập thư mục chứa nội dung và chưa chọn file project.")
+                return
+            proj_dir = os.path.dirname(os.path.abspath(proj))
+            parent = os.path.join(proj_dir, 'resource')
+            try:
+                os.makedirs(parent, exist_ok=True)
+                self.log(f"Dùng mặc định thư mục nội dung: {parent}")
+            except Exception as e:
+                self.log(f"LỖI: Không tạo được thư mục mặc định: {e}")
+                return
+            self.parent_folder_var.set(parent)
         if not os.path.isdir(parent):
             try:
                 os.makedirs(parent, exist_ok=True)
-                self.log(f"Đã tạo thư mục chứa video: {parent}")
+                self.log(f"Đã tạo thư mục chứa nội dung: {parent}")
             except Exception as e:
                 self.log(f"LỖI: Không tạo được thư mục cha: {e}")
                 return
@@ -268,25 +259,9 @@ class AutoToolGUI(tk.Tk):
             except Exception:
                 self.log(f"CẢNH BÁO: Không tạo được thư mục data gốc: {DATA_DIR}")
 
-        # Determine links output directory
-        custom_links_dir = self.links_folder_var.get().strip()
-        if custom_links_dir:
-            links_dir = os.path.abspath(custom_links_dir.replace('/', os.sep))
-            if not os.path.isdir(links_dir):
-                try:
-                    os.makedirs(links_dir, exist_ok=True)
-                    self.log(f"Đã tạo thư mục lưu link: {links_dir}")
-                except Exception as e:
-                    self.log(f"CẢNH BÁO: Không tạo được thư mục lưu link ({e}); dùng mặc định.")
-                    links_dir = DATA_DIR
-            else:
-                self.log(f"Dùng thư mục link tuỳ chọn: {links_dir}")
-        else:
-            links_dir = DATA_DIR
-            self.log("Dùng thư mục data mặc định cho link.")
-        # Nếu người dùng không chọn custom links dir, ta dùng thư mục project trong data
-        if links_dir == DATA_DIR:
-            links_dir = data_project_dir
+        # Thư mục lưu link: luôn dùng thư mục project trong data
+        links_dir = data_project_dir
+        self.log(f"Thư mục lưu link: {links_dir}")
         links_txt = os.path.join(links_dir, "dl_links.txt")       # list of grouped video links
         links_img_txt = os.path.join(links_dir, "dl_links_image.txt")  # list of grouped image links
 

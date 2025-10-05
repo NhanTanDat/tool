@@ -1,4 +1,4 @@
-"""YouTube link gathering utilities (improved).
+"""YouTube/Google Images link gathering utilities (improved).
 
 Tính năng:
  - Giữ nguyên thứ tự keyword.
@@ -8,6 +8,11 @@ Tính năng:
  - Giới hạn số video / keyword (max_per_keyword).
  - Lọc theo thời lượng tối đa (max_minutes) nếu cung cấp.
  - Lọc theo thời lượng tối thiểu (min_minutes) nếu cung cấp.
+
+Luồng chính tách riêng:
+ - get_links_main_video: Chỉ thu link video YouTube.
+ - get_links_main_image: Chỉ thu link ảnh Google Images.
+ - get_links_main: Giữ tương thích cũ, gọi lần lượt 2 luồng trên.
 """
 
 from selenium import webdriver
@@ -357,7 +362,7 @@ def get_dl_link_image(driver, keyword, num_of_image=10):
 
     return collected[:num_of_image]
 
-def get_links_main(
+def get_links_main_video(
     keywords_file,
     output_txt,
     project_name=None,
@@ -365,9 +370,16 @@ def get_links_main(
     max_per_keyword: int = 2,
     max_minutes: Optional[int] = None,
     min_minutes: Optional[int] = None,
-    images_per_keyword: int = 10,
 ):
-    print("[get_link] === START get_links_main ===")
+    """Thu link video theo từng keyword và ghi ra output_txt.
+
+    Định dạng file:
+    <stt> <keyword>
+    <link 1>
+    <link 2>
+    ...
+    """
+    print("[get_link] === START get_links_main_video ===")
     print(f"[get_link] keywords_file = {keywords_file}")
     print(f"[get_link] output_txt    = {output_txt}")
     if project_name:
@@ -379,15 +391,11 @@ def get_links_main(
         return
 
     driver = init_driver(headless=headless)
-    txt_name = output_txt
-    txt_name_image = output_txt.replace('.txt', '_image.txt')
     stt = 0
     num_vd = 0
     # clear file at start
     try:
-        with open(txt_name, 'w', encoding='utf-8') as f:
-            f.write('')
-        with open(txt_name_image, 'w', encoding='utf-8') as f:
+        with open(output_txt, 'w', encoding='utf-8') as f:
             f.write('')
     except Exception as e:
         print(f"[get_link] ERROR: cannot clear output file: {e}")
@@ -404,34 +412,128 @@ def get_links_main(
                 max_minutes=max_minutes,
                 min_minutes=min_minutes,
             )
-            # số ảnh mỗi keyword do GUI truyền xuống (mặc định 10)
-            img_count = images_per_keyword if images_per_keyword and images_per_keyword > 0 else 10
-            image_links = get_dl_link_image(driver, keyword, num_of_image=img_count)
         except Exception as e:
-            print(f"[get_link] ERROR collecting links for '{keyword}': {e}")
+            print(f"[get_link] ERROR collecting video links for '{keyword}': {e}")
             video_links = []
-            image_links = []
 
         stt += 1
         try:
-            with open(txt_name, 'a', encoding='utf-8') as f:
+            with open(output_txt, 'a', encoding='utf-8') as f:
                 f.write(f"{stt} {keyword}\n")
                 for link in video_links:
                     num_vd += 1
                     f.write(f"{link}\n")
-
-            with open(txt_name_image, 'a', encoding='utf-8') as f:
-                f.write(f"{stt} {keyword}\n")
-                for link in image_links:
-                    f.write(f"{link}\n")
         except Exception as e:
-            print(f"[get_link] ERROR writing links for '{keyword}': {e}")
-        # nhỏ delay để tránh bị chặn (có thể điều chỉnh thấp hơn nếu cần)
+            print(f"[get_link] ERROR writing video links for '{keyword}': {e}")
         sleep(1.0)
 
     print(f"[get_link] TOTAL video links written: {num_vd}")
     close_driver(driver)
-    print("[get_link] === END get_links_main ===")
+    print("[get_link] === END get_links_main_video ===")
+
+
+def get_links_main_image(
+    keywords_file,
+    output_txt,
+    project_name=None,
+    headless=False,
+    images_per_keyword: int = 10,
+):
+    """Thu link ảnh theo từng keyword và ghi ra output_txt.
+
+    Lưu ý: output_txt là đường dẫn file ảnh (vd: dl_links_image.txt). Hàm này chỉ ghi ảnh.
+
+    Định dạng file:
+    <stt> <keyword>
+    <link ảnh 1>
+    <link ảnh 2>
+    ...
+    """
+    print("[get_link] === START get_links_main_image ===")
+    print(f"[get_link] keywords_file = {keywords_file}")
+    print(f"[get_link] output_txt    = {output_txt}")
+    if project_name:
+        print(f"[get_link] project_name  = {project_name}")
+
+    keywords = read_keywords_from_file(keywords_file)
+    if not keywords:
+        print("[get_link] No keywords found -> abort.")
+        return
+
+    driver = init_driver(headless=headless)
+    stt = 0
+    # clear file at start
+    try:
+        with open(output_txt, 'w', encoding='utf-8') as f:
+            f.write('')
+    except Exception as e:
+        print(f"[get_link] ERROR: cannot clear output file: {e}")
+        close_driver(driver)
+        return
+
+    for idx, keyword in enumerate(keywords, start=1):
+        print(f"[get_link] --- ({idx}/{len(keywords)}) '{keyword}' ---")
+        try:
+            img_count = images_per_keyword if images_per_keyword and images_per_keyword > 0 else 10
+            image_links = get_dl_link_image(driver, keyword, num_of_image=img_count)
+        except Exception as e:
+            print(f"[get_link] ERROR collecting image links for '{keyword}': {e}")
+            image_links = []
+
+        stt += 1
+        try:
+            with open(output_txt, 'a', encoding='utf-8') as f:
+                f.write(f"{stt} {keyword}\n")
+                for link in image_links:
+                    f.write(f"{link}\n")
+        except Exception as e:
+            print(f"[get_link] ERROR writing image links for '{keyword}': {e}")
+        sleep(1.0)
+
+    close_driver(driver)
+    print("[get_link] === END get_links_main_image ===")
+
+def get_links_main(
+    keywords_file,
+    output_txt,
+    project_name=None,
+    headless=False,
+    max_per_keyword: int = 2,
+    max_minutes: Optional[int] = None,
+    min_minutes: Optional[int] = None,
+    images_per_keyword: int = 10,
+):
+    """Giữ tương thích cũ: chạy cả video và ảnh.
+
+    - Video -> ghi vào output_txt.
+    - Ảnh  -> ghi vào output_txt với hậu tố `_image.txt` nếu tên file kết thúc bằng .txt,
+              ngược lại thêm hậu tố `_image`.
+    """
+    print("[get_link] === START get_links_main (compat) ===")
+    # 1) Video
+    get_links_main_video(
+        keywords_file=keywords_file,
+        output_txt=output_txt,
+        project_name=project_name,
+        headless=headless,
+        max_per_keyword=max_per_keyword,
+        max_minutes=max_minutes,
+        min_minutes=min_minutes,
+    )
+
+    # 2) Image
+    if isinstance(output_txt, str) and output_txt.lower().endswith('.txt'):
+        img_output = output_txt[:-4] + '_image.txt'
+    else:
+        img_output = output_txt + '_image'
+    get_links_main_image(
+        keywords_file=keywords_file,
+        output_txt=img_output,
+        project_name=project_name,
+        headless=headless,
+        images_per_keyword=images_per_keyword,
+    )
+    print("[get_link] === END get_links_main (compat) ===")
 
 
 if __name__ == "__main__":

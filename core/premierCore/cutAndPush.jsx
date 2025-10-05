@@ -465,6 +465,31 @@ function cutAndPushAllTimeline(tlFilePath) {
     $.writeln('[cutAndPushAllTimeline] Read ' + tlEntries.length + ' entries from timeline file.');
     var processedCount = 0;
     var sizeBin = {}; // cache bin sizes
+    // Map quản lý pool index cho từng bin: { binName: [idx... (đã shuffle)] }
+    var binIdxMap = {};
+
+    function shuffleInPlace(arr){
+        for (var i = arr.length - 1; i > 0; i--){
+            var j = Math.floor(Math.random() * (i + 1));
+            var t = arr[i]; arr[i] = arr[j]; arr[j] = t;
+        }
+        return arr;
+    }
+
+    function ensureBinPool(binName, binSize){
+        var pool = binIdxMap[binName];
+        if (!pool || pool.length === 0){
+            var arr = [];
+            for (var k=0; k<binSize; k++) arr.push(k);
+            binIdxMap[binName] = shuffleInPlace(arr);
+        }
+    }
+
+    function popIdxFromBin(binName, binSize){
+        ensureBinPool(binName, binSize);
+        // pop 1 phần tử cuối cùng
+        return binIdxMap[binName].pop();
+    }
 
     for (var i = 0; i < tlEntries.length; i++) {
         var entry = tlEntries[i];
@@ -507,22 +532,11 @@ function cutAndPushAllTimeline(tlFilePath) {
             }
             sizeBin[binName] = binSize; // lưu lại size bin
         }
-        // chọn video trong bin NGẪU NHIÊN mỗi lần cắt (tránh lặp lại liên tiếp nếu có thể)
-        var lastIdx = -1;
-        function pickRandomClipIndex(sz, last){
-            if (sz <= 1) return 0;
-            var attempt = 0; var r;
-            do {
-                r = Math.floor(Math.random() * sz);
-                attempt++;
-            } while (r === last && attempt < 5); // cố gắng không trùng liên tiếp
-            return r;
-        }
+        // Lựa chọn idx theo pool đã shuffle/popup cho từng binName
         while (true){
-            var idxInBin = pickRandomClipIndex(binSize, lastIdx);
+            var idxInBin = popIdxFromBin(binName, binSize);
             var prevStart = startSeconds;
             startSeconds = cutAndPushClipToTimeline(binName, idxInBin, startSeconds, endSeconds, sequence, targetVideoTrack);
-            lastIdx = idxInBin;
             if (startSeconds === null || startSeconds === prevStart) { // không tiến lên -> dừng tránh vòng lặp vô hạn
                 $.writeln('[cutAndPushAllTimeline] Stop loop for entry at line ' + (i+1) + ' (no progress)');
                 break;
@@ -531,6 +545,7 @@ function cutAndPushAllTimeline(tlFilePath) {
                 $.writeln('[cutAndPushAllTimeline] Finished entry at line ' + (i+1));
                 break; // hoàn thành mục này
             }
+            // Khi pool rỗng, lần gọi popIdxFromBin tiếp theo sẽ tự tái tạo pool với shuffle ngẫu nhiên
         }
         processedCount++;
     }

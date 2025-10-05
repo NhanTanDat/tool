@@ -3,6 +3,7 @@ import sys
 import time
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
+import json
 
 # ---------------------------------------------------------------------------
 # Ensure project root (where 'core' lives) is on sys.path
@@ -17,6 +18,9 @@ if not os.path.isdir(DATA_DIR):
         pass
 if _ROOT_DIR not in sys.path:
     sys.path.insert(0, _ROOT_DIR)
+
+# Path to persisted config file
+CONFIG_PATH = os.path.join(DATA_DIR, 'config.json')
 
 # NOTE: Heavy modules (pywinauto / selenium / yt-dlp helpers) are now lazily imported
 # to avoid UI lag when opening simple dialogs like Browse. They will be imported only
@@ -55,7 +59,35 @@ class AutoToolGUI(tk.Tk):
         # Batch projects list
         self.batch_projects: list[str] = []
 
+        # Prevent saving while loading initial config
+        self._loading_config = True
+
+        # Load previous config (if any) before building UI so variables are pre-populated
+        try:
+            self._load_config()
+        except Exception:
+            pass
+
         self._build_ui()
+
+        # Populate batch list UI if loaded from config
+        try:
+            self._refresh_batch_listbox()
+        except Exception:
+            pass
+
+        # Save config on close
+        try:
+            self.protocol("WM_DELETE_WINDOW", self._on_close)
+        except Exception:
+            pass
+
+        # Now that UI is ready, bind variable change traces for auto-save
+        self._loading_config = False
+        try:
+            self._bind_config_traces()
+        except Exception:
+            pass
         try:
             from core import logging_bridge as _lb  # type: ignore
             _lb.register_gui_logger(self.log)
@@ -86,8 +118,7 @@ class AutoToolGUI(tk.Tk):
         ttk.Button(frm, text="Chọn", command=self.browse_project).grid(row=row, column=2, padx=pad, pady=(pad, 2))
         row += 1
         ttk.Label(frm, text="Thư mục chứa nội dung (video/ảnh):").grid(row=row, column=0, sticky="w", padx=pad, pady=2)
-        ttk.Entry(frm, textvariable=self.parent_folder_var, width=54).grid(row=row, column=1, sticky="w", padx=pad, pady=2)
-        ttk.Button(frm, text="Chọn", command=self.browse_parent).grid(row=row, column=2, padx=pad, pady=2)
+        ttk.Label(frm, textvariable=self.parent_folder_var).grid(row=row, column=1, columnspan=2, sticky="w", padx=pad, pady=2)
         row += 1
         ttk.Label(frm, text="Phiên bản Premiere:").grid(row=row, column=0, sticky="w", padx=pad, pady=2)
         ttk.Combobox(frm, textvariable=self.version_var, values=["2022", "2023", "2024", "2025"], width=12, state="readonly").grid(row=row, column=1, sticky="w", padx=pad, pady=2)
@@ -182,6 +213,11 @@ class AutoToolGUI(tk.Tk):
         if path:
             self.parent_folder_var.set(path)
             self.log(f"Selected parent folder: {path} (dialog {elapsed:.1f} ms)")
+            # Save config after change
+            try:
+                self._save_config()
+            except Exception:
+                pass
         else:
             self.log(f"Browse cancelled (dialog {elapsed:.1f} ms)")
 
@@ -199,6 +235,11 @@ class AutoToolGUI(tk.Tk):
             except Exception as e:
                 self.log(f"CẢNH BÁO: Không tạo được thư mục resource mặc định ({e})")
             self.parent_folder_var.set(resource_dir)
+            # Save config after change
+            try:
+                self._save_config()
+            except Exception:
+                pass
 
     # (Đã loại bỏ input 'Thư mục lưu link')
 
@@ -490,6 +531,10 @@ class AutoToolGUI(tk.Tk):
             except Exception as e:
                 self.log(f"LỖI batch item: {e}")
         self.log("=== KẾT THÚC CHẠY HÀNG LOẠT ===")
+        try:
+            self._save_config()
+        except Exception:
+            pass
 
     def run_download_images(self):
         parent = self.parent_folder_var.get().strip()
@@ -526,6 +571,11 @@ class AutoToolGUI(tk.Tk):
             self.log(f"Đã gửi tải {attempted} ảnh. Xem kết quả trong các thư mục *_img tại: {parent}")
         except Exception as e:
             self.log(f"LỖI khi tải ảnh: {e}")
+        # Save config after operation
+        try:
+            self._save_config()
+        except Exception:
+            pass
 
     # --------------------------------------------------------------
     # Helper: derive project slug (shared between main & status window)
@@ -636,6 +686,124 @@ class AutoToolGUI(tk.Tk):
         except Exception:
             pass
         return groups, total_links
+
+    # --------------------------------------------------------------
+    # Config persistence helpers
+    # --------------------------------------------------------------
+    def _save_config(self):
+        try:
+            cfg = {
+                'parent_folder': self.parent_folder_var.get().strip(),
+                'project_file': self.project_file_var.get().strip(),
+                'version': self.version_var.get().strip(),
+                'mode': self.mode_var.get().strip(),
+                'videos_per_keyword': self.videos_per_keyword_var.get().strip(),
+                'images_per_keyword': self.images_per_keyword_var.get().strip(),
+                'max_duration': self.max_duration_var.get().strip(),
+                'min_duration': self.min_duration_var.get().strip(),
+                'regen_links': bool(self.regen_links_var.get()),
+                'batch_projects': list(self.batch_projects) if isinstance(self.batch_projects, list) else [],
+            }
+            os.makedirs(os.path.dirname(CONFIG_PATH), exist_ok=True)
+            with open(CONFIG_PATH, 'w', encoding='utf-8') as f:
+                json.dump(cfg, f, ensure_ascii=False, indent=2)
+        except Exception:
+            # Non-fatal: ignore write errors, optionally log
+            try:
+                self.log("CẢNH BÁO: Không ghi được config.")
+            except Exception:
+                pass
+
+    def _load_config(self):
+        if not os.path.isfile(CONFIG_PATH):
+            return
+        try:
+            with open(CONFIG_PATH, 'r', encoding='utf-8') as f:
+                cfg = json.load(f)
+        except Exception as e:
+            try:
+                self.log(f"CẢNH BÁO: Không đọc được config: {e}")
+            except Exception:
+                pass
+            return
+        # Apply values to variables (ignore missing keys)
+        try:
+            if 'parent_folder' in cfg:
+                self.parent_folder_var.set(str(cfg['parent_folder']))
+            if 'project_file' in cfg:
+                self.project_file_var.set(str(cfg['project_file']))
+            if 'version' in cfg:
+                self.version_var.set(str(cfg['version']))
+            if 'mode' in cfg:
+                self.mode_var.set(str(cfg['mode']))
+            if 'videos_per_keyword' in cfg:
+                self.videos_per_keyword_var.set(str(cfg['videos_per_keyword']))
+            if 'images_per_keyword' in cfg:
+                self.images_per_keyword_var.set(str(cfg['images_per_keyword']))
+            if 'max_duration' in cfg:
+                self.max_duration_var.set(str(cfg['max_duration']))
+            if 'min_duration' in cfg:
+                self.min_duration_var.set(str(cfg['min_duration']))
+            if 'regen_links' in cfg:
+                try:
+                    self.regen_links_var.set(bool(cfg['regen_links']))
+                except Exception:
+                    pass
+            if 'batch_projects' in cfg and isinstance(cfg['batch_projects'], list):
+                self.batch_projects = [str(x) for x in cfg['batch_projects']]
+        except Exception as e:
+            try:
+                self.log(f"CẢNH BÁO: Không áp dụng được config: {e}")
+            except Exception:
+                pass
+
+    def _refresh_batch_listbox(self):
+        try:
+            self.batch_list.delete(0, 'end')
+            for item in self.batch_projects:
+                self.batch_list.insert('end', item)
+        except Exception:
+            pass
+
+    def _on_close(self):
+        try:
+            self._save_config()
+        finally:
+            try:
+                self.destroy()
+            except Exception:
+                pass
+
+    def _on_var_change(self, *args):
+        # Skip saving while loading initial config
+        if getattr(self, '_loading_config', False):
+            return
+        try:
+            self._save_config()
+        except Exception:
+            pass
+
+    def _bind_config_traces(self):
+        # Bind variable write events to auto-save config
+        vars_to_bind = [
+            self.parent_folder_var,
+            self.project_file_var,
+            self.version_var,
+            self.mode_var,
+            self.videos_per_keyword_var,
+            self.images_per_keyword_var,
+            self.max_duration_var,
+            self.min_duration_var,
+            self.regen_links_var,
+        ]
+        for v in vars_to_bind:
+            try:
+                v.trace_add('write', self._on_var_change)
+            except Exception:
+                try:
+                    v.trace('w', self._on_var_change)  # Tk < 8.6 fallback
+                except Exception:
+                    pass
 
 # ---------------------------------------------------------------------------
 # Entrypoint

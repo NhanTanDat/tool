@@ -1,0 +1,3 @@
+project_slug=3638
+data_folder=P:\coddd\autotool//data/3638
+project_path=C:/Users/phamp/Downloads/Copied_3638/Copied_3638/3638.prproj

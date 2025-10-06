@@ -1,4 +1,3 @@
-
 // NOTE: ExtendScript không hỗ trợ cú pháp ES6 import; bỏ dòng import và dùng hàm tự định nghĩa.
 // Helper notify giống các file khác (tùy chọn bật alert)
 var ENABLE_ALERTS = false;
@@ -7,32 +6,105 @@ function notify(msg){
     if (ENABLE_ALERTS) { try { alert(msg); } catch(e){} }
 }
 
-// ================== DYNAMIC DATA FOLDER RESOLUTION ==================
-// Tìm thư mục 'data' đi ngược lên tối đa maxLevels từ vị trí script.
-// Nếu không thấy sẽ tạo mới ở cùng cấp script.
-var DATA_FOLDER = (function(){
-    try {
-        var scriptFile = ($.fileName) ? new File($.fileName) : null;
-        var dir = scriptFile ? scriptFile.parent : null;
-        var maxLevels = 8;
-        while (dir && maxLevels-- > 0) {
-            var candidate = new Folder(dir.fsName + '/data');
-            if (candidate.exists) {
-                $.writeln('[DATA_FOLDER] Found existing data folder: ' + candidate.fsName);
-                return candidate.fsName.replace(/\\/g,'/');
-            }
-            dir = dir.parent;
-        }
-        // fallback create near script
-        var fallback = scriptFile ? new Folder(scriptFile.parent.fsName + '/data') : new Folder(Folder.current.fsName + '/data');
-        if (!fallback.exists) { fallback.create(); $.writeln('[DATA_FOLDER] Created fallback data folder: ' + fallback.fsName); }
-        return fallback.fsName.replace(/\\/g,'/');
-    } catch(e){
-        $.writeln('[DATA_FOLDER] Resolution error: ' + e);
-        var fallback2 = new Folder(Folder.current.fsName + '/data');
-        if (!fallback2.exists) fallback2.create();
-        return fallback2.fsName.replace(/\\/g,'/');
-    }
+// ===== Helpers for path + I/O =====
+function _joinPath(a, b) {
+	if (!a || a === '') return b || '';
+	if (!b || b === '') return a || '';
+	var s = a.charAt(a.length - 1);
+	return (s === '/' || s === '\\') ? (a + b) : (a + '/' + b);
+}
+
+function _fileExists(p) {
+	try { var f = new File(p); return f.exists; } catch (e) { return false; }
+}
+
+function _folderExists(p) {
+	try { var f = new Folder(p); return f.exists; } catch (e) { return false; }
+}
+
+function _ensureFolder(p) {
+	try { var f = new Folder(p); if (!f.exists) return f.create(); return true; } catch (e) { return false; }
+}
+
+function _readTextFile(p) {
+	try {
+		var f = new File(p);
+		if (!f.exists) return '';
+		if (!f.open('r')) return '';
+		var t = f.read();
+		f.close();
+		return t;
+	} catch (e) { return ''; }
+}
+
+// parse text file with key=value format
+function _parsePathTxt(path) {
+	try {
+		var content = _readTextFile(path);
+		var lines = content.split('\n');
+		var cfg = {};
+		for (var i = 0; i < lines.length; i++) {
+			var line = lines[i].replace(/^\s+|\s+$/g, '');
+			if (line === "" || line.indexOf("=") === -1) continue;
+			var parts = line.split("=");
+			if (parts.length >= 2) {
+				var key = parts[0].replace(/^\s+|\s+$/g, '');
+				var value = parts.slice(1).join("=").replace(/^\s+|\s+$/g, '');
+				cfg[key] = value;
+			}
+		}
+		return cfg;
+	} catch (e) {
+		$.writeln("Lỗi đọc file text: " + e.message);
+		return {};
+	}
+}
+
+// ===== Xác định thư mục data theo path.txt =====
+var DATA_FOLDER = (function () {
+	try {
+		// 1) Tìm root (....../projectRoot)
+		var scriptFile = new File($.fileName);      // .../core/premierCore/cutAndPush.jsx
+		var premierCoreDir = scriptFile.parent;     // premierCore
+		var coreDir = premierCoreDir.parent;        // core
+		var rootDir = coreDir.parent;               // project root
+
+		// 2) Root data folder (để tìm path.txt): <root>/data
+		var rootDataPath = rootDir.fsName + '/data';
+		_ensureFolder(rootDataPath);
+
+		// 3) Đọc data/path.txt (nếu có) để lấy data_folder hoặc project_slug
+		var pathTxt = _joinPath(rootDataPath, 'path.txt');
+		var targetDataPath = rootDataPath; // fallback mặc định
+		if (_fileExists(pathTxt)) {
+			try {
+				var cfg = _parsePathTxt(pathTxt);
+				// Ưu tiên trường data_folder (có thể là tuyệt đối hoặc tương đối so với root/data)
+				if (cfg && cfg.data_folder) {
+					var df = String(cfg.data_folder);
+					if (_folderExists(df)) {
+						targetDataPath = df;
+					} else {
+						targetDataPath = _joinPath(rootDataPath, df);
+					}
+				} else if (cfg && cfg.project_slug) {
+					targetDataPath = _joinPath(rootDataPath, String(cfg.project_slug));
+				}
+			} catch (eCfg) {
+				$.writeln('[DATA_FOLDER] Lỗi đọc path.txt, dùng fallback root/data. Error: ' + eCfg);
+			}
+		} else {
+			$.writeln('[DATA_FOLDER] Không tìm thấy data/path.txt, dùng fallback root/data');
+		}
+
+		_ensureFolder(targetDataPath);
+		var folder = new Folder(targetDataPath);
+		$.writeln('[DATA_FOLDER] Using data folder: ' + folder.fsName);
+		return folder.fsName.replace(/\\/g,'/');
+	} catch (e2) {
+		$.writeln('[DATA_FOLDER] Fallback to desktop due to error: ' + e2);
+		return Folder.desktop.fsName.replace(/\\/g,'/');
+	}
 })();
 
 // Helper tạo path chuẩn
@@ -427,8 +499,17 @@ function cutAndPushAllTimeline(tlFilePath) {
     // Nếu không truyền vào, dùng file mặc định timeline_merged.txt trong DATA_FOLDER
     if (!tlFilePath || tlFilePath === '') {
         // Ưu tiên plaintext merge; nếu chưa có sẽ thử JSON rồi CSV sau.
-        tlFilePath = joinPath(DATA_FOLDER, 'timeline_merged.txt');
-        $.writeln('[cutAndPushAllTimeline] Default primary path: ' + tlFilePath);
+        var defaultPath = joinPath(DATA_FOLDER, 'timeline_merged.txt');
+        tlFilePath = new File(defaultPath);
+        $.writeln('[cutAndPushAllTimeline] Default primary path: ' + defaultPath);
+    } else if (typeof tlFilePath === 'string') {
+        // Nếu truyền string, convert thành File object
+        tlFilePath = new File(tlFilePath);
+    }
+    // Đảm bảo tlFilePath là File object
+    if (!(tlFilePath instanceof File)) {
+        notify('tlFilePath phải là đường dẫn file hoặc File object');
+        return -1;
     }
     initializeProjectAndSequence();
     if(!project || !sequence) return -1;
@@ -454,13 +535,13 @@ function cutAndPushAllTimeline(tlFilePath) {
 
     // đọc file timeline (plain text)
     var tlEntries = [];
-    // Chọn parser dựa vào phần mở rộng nếu người dùng truyền đích danh
-    if (tlFilePath.match(/\.csv$/i)) {
+    //nếu file là csv thì dùng hàm đọc csv, không dùng endWith, match để tránh lỗi
+    if (tlFilePath.fsName.match(/\.csv$/)) {
         tlEntries = readTimelineCSVFile(tlFilePath);
     } else {
-        return notify('Chỉ hỗ trợ file CSV hiện tại: ' + tlFilePath), -1;
+        return notify('Chỉ hỗ trợ file CSV hiện tại: ' + tlFilePath.fsName), -1;
     }
-    if (!tlEntries.length) { notify('Không có entry hợp lệ trong file: ' + tlFilePath); return -1; }
+    if (!tlEntries.length) { notify('Không có entry hợp lệ trong file: ' + tlFilePath.fsName); return -1; }
 
     $.writeln('[cutAndPushAllTimeline] Read ' + tlEntries.length + ' entries from timeline file.');
     var processedCount = 0;
@@ -549,11 +630,12 @@ function cutAndPushAllTimeline(tlFilePath) {
         }
         processedCount++;
     }
-    notify('Hoàn thành chèn ' + processedCount + ' mục vào timeline từ file: ' + tlFilePath);
+    notify('Hoàn thành chèn ' + processedCount + ' mục vào timeline từ file: ' + tlFilePath.fsName);
     return processedCount;
 }
 
 //test
 
+// Allow override from runAll.jsx: when RUNALL_TIMELINE_CSV_PATH is defined, prefer that.
 var csvDef = joinPath(DATA_FOLDER, 'timeline_export_merged.csv');
 cutAndPushAllTimeline(csvDef);

@@ -9,4 +9,4 @@
 *.xml
 # # Allow tracking everything under data/ despite the above global ignores
 # !data/
-# !data/**
+!data/path.txt

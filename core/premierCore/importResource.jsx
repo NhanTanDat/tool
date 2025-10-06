@@ -202,5 +202,67 @@ function importMultipleFolders(parentFolderPath) {
 	return totalImported;
 }
 
+// ===== Helper: Đọc path.txt để lấy data_folder =====
+function _readTextFile(p) {
+	try {
+		var f = new File(p);
+		if (!f.exists) return '';
+		if (!f.open('r')) return '';
+		var t = f.read();
+		f.close();
+		return t;
+	} catch (e) { return ''; }
+}
+
+function _parsePathTxt(path) {
+	try {
+		var content = _readTextFile(path);
+		var lines = content.split('\n');
+		var cfg = {};
+		for (var i = 0; i < lines.length; i++) {
+			var line = lines[i].replace(/^\s+|\s+$/g, '');
+			if (line === "" || line.indexOf("=") === -1) continue;
+			var parts = line.split("=");
+			if (parts.length >= 2) {
+				var key = parts[0].replace(/^\s+|\s+$/g, '');
+				var value = parts.slice(1).join("=").replace(/^\s+|\s+$/g, '');
+				cfg[key] = value;
+			}
+		}
+		return cfg;
+	} catch (e) {
+		$.writeln("Lỗi đọc file text: " + e.message);
+		return {};
+	}
+}
+
+function getResourceFolderFromConfig() {
+	// Check if override from runAll.jsx
+	if (typeof RUNALL_RESOURCE_DIR !== 'undefined' && RUNALL_RESOURCE_DIR) {
+		return RUNALL_RESOURCE_DIR;
+	}
+	// Fallback to reading from path.txt
+	var pathTxt = $.fileName ? new File($.fileName).parent.parent.parent.fsName + '/data/path.txt' : 'data/path.txt';
+	var cfg = _parsePathTxt(pathTxt);
+	if (cfg && cfg.project_path) {
+		//loại bỏ tên file, lấy thư mục cha + /resource
+		var projPath = cfg.project_path.replace(/\\/g, '/');
+		var lastSlash = projPath.lastIndexOf('/');
+		if (lastSlash !== -1) {
+			return projPath.substring(0, lastSlash) + '/resource';
+		}
+	}
+	if (cfg && cfg.data_folder) {
+		// Sửa lại dấu gạch chéo ngược thành gạch chéo xuôi cho đồng nhất
+		return cfg.data_folder.replace(/\\/g, '/') + '/resource';
+	}
+	return '';
+}
+
 // Example usage (bỏ comment để test):
-importMultipleFolders("C:/Users/phamp/OneDrive/Máy tính/test");
+var resourceFolder = getResourceFolderFromConfig();
+if (resourceFolder) {
+	IMPORTED_FILE_COUNT = importMultipleFolders(resourceFolder);
+} else {
+	notify('Không xác định được resource folder từ path.txt');
+}

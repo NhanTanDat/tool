@@ -66,18 +66,102 @@ if (typeof JSON.parse !== 'function') {
 	};
 }
 
-// ===== Xác định thư mục data động (dựa theo vị trí script) =====
-var DATA_FOLDER = (function(){
+// ===== Helpers for path + I/O =====
+function _joinPath(a, b) {
+	if (!a || a === '') return b || '';
+	if (!b || b === '') return a || '';
+	var s = a.charAt(a.length - 1);
+	return (s === '/' || s === '\\') ? (a + b) : (a + '/' + b);
+}
+
+function _fileExists(p) {
+	try { var f = new File(p); return f.exists; } catch (e) { return false; }
+}
+
+function _folderExists(p) {
+	try { var f = new Folder(p); return f.exists; } catch (e) { return false; }
+}
+
+function _ensureFolder(p) {
+	try { var f = new Folder(p); if (!f.exists) return f.create(); return true; } catch (e) { return false; }
+}
+
+function _readTextFile(p) {
 	try {
-		var scriptFile = new File($.fileName);              // .../core/premierCore/getTimeline.jsx
-		var premierCoreDir = scriptFile.parent;             // premierCore
-		var coreDir = premierCoreDir.parent;                // core
-		var rootDir = coreDir.parent;                       // project root
-		var dataDir = new Folder(rootDir.fsName + '/data');
-		if (!dataDir.exists) { try { dataDir.create(); } catch(e){ $.writeln('[DATA_FOLDER] Cannot create data folder: ' + e); } }
-		$.writeln('[DATA_FOLDER] Using data folder: ' + dataDir.fsName);
-		return dataDir;
-	} catch(e2) {
+		var f = new File(p);
+		if (!f.exists) return '';
+		if (!f.open('r')) return '';
+		var t = f.read();
+		f.close();
+		return t;
+	} catch (e) { return ''; }
+}
+
+// parse text file with key=value format
+function _parsePathTxt(path) {
+	try {
+		var content = _readTextFile(path);
+		var lines = content.split('\n');
+		var cfg = {};
+		for (var i = 0; i < lines.length; i++) {
+			var line = lines[i].replace(/^\s+|\s+$/g, '');
+			if (line === "" || line.indexOf("=") === -1) continue;
+			var parts = line.split("=");
+			if (parts.length >= 2) {
+				var key = parts[0].replace(/^\s+|\s+$/g, '');
+				var value = parts.slice(1).join("=").replace(/^\s+|\s+$/g, '');
+				cfg[key] = value;
+			}
+		}
+		return cfg;
+	} catch (e) {
+		$.writeln("Lỗi đọc file text: " + e.message);
+		return {};
+	}
+}
+
+// ===== Xác định thư mục data theo path.txt =====
+var DATA_FOLDER = (function () {
+	try {
+		// 1) Tìm root (....../projectRoot)
+		var scriptFile = new File($.fileName);      // .../core/premierCore/getTimeline.jsx
+		var premierCoreDir = scriptFile.parent;     // premierCore
+		var coreDir = premierCoreDir.parent;        // core
+		var rootDir = coreDir.parent;               // project root
+
+		// 2) Root data folder (để tìm path.txt): <root>/data
+		var rootDataPath = rootDir.fsName + '/data';
+		_ensureFolder(rootDataPath);
+
+		// 3) Đọc data/path.txt (nếu có) để lấy data_folder hoặc project_slug
+		var pathTxt = _joinPath(rootDataPath, 'path.txt');
+		var targetDataPath = rootDataPath; // fallback mặc định
+		if (_fileExists(pathTxt)) {
+			try {
+				var cfg = _parsePathTxt(pathTxt);
+				// Ưu tiên trường data_folder (có thể là tuyệt đối hoặc tương đối so với root/data)
+				if (cfg && cfg.data_folder) {
+					var df = String(cfg.data_folder);
+					if (_folderExists(df)) {
+						targetDataPath = df;
+					} else {
+						targetDataPath = _joinPath(rootDataPath, df);
+					}
+				} else if (cfg && cfg.project_slug) {
+					targetDataPath = _joinPath(rootDataPath, String(cfg.project_slug));
+				}
+			} catch (eCfg) {
+				$.writeln('[DATA_FOLDER] Lỗi đọc path.txt, dùng fallback root/data. Error: ' + eCfg);
+			}
+		} else {
+			$.writeln('[DATA_FOLDER] Không tìm thấy data/path.txt, dùng fallback root/data');
+		}
+
+		_ensureFolder(targetDataPath);
+		var folder = new Folder(targetDataPath);
+		$.writeln('[DATA_FOLDER] Using data folder: ' + folder.fsName);
+		return folder;
+	} catch (e2) {
 		$.writeln('[DATA_FOLDER] Fallback to desktop due to error: ' + e2);
 		return Folder.desktop;
 	}
@@ -474,14 +558,14 @@ function runQuickTimelineTest(opts) {
 		firstStartStr = firstClip.startTimecode ? firstClip.startTimecode : (firstClip.startSeconds + 's');
 		lastEndStr = lastClip.endTimecode ? lastClip.endTimecode : (lastClip.endSeconds + 's');
 	}
-	var summary = 'Track #' + trackIndex + ' | Clips: ' + clipCount + '\n' +
-				  'Start: ' + firstStartStr + ' -> End: ' + lastEndStr + '\n' +
-				  (usedProvidedTrack ? '(Track do người dùng chỉ định)\n' : (fallbackUsed ? 'Fallback Top Non-Empty Track\n' : 'Topmost Selected Track\n')) +
-				  'Assertion (topmost is max): ' + (pass ? 'PASS' : 'FAIL');
-	$.writeln('[runQuickTimelineTest]\n' + summary);
-	if (typeof alert === 'function') {
-		try { alert(summary); } catch (e) { /* ignore */ }
-	}
+	// var summary = 'Track #' + trackIndex + ' | Clips: ' + clipCount + '\n' +
+	// 			  'Start: ' + firstStartStr + ' -> End: ' + lastEndStr + '\n' +
+	// 			  (usedProvidedTrack ? '(Track do người dùng chỉ định)\n' : (fallbackUsed ? 'Fallback Top Non-Empty Track\n' : 'Topmost Selected Track\n')) +
+	// 			  'Assertion (topmost is max): ' + (pass ? 'PASS' : 'FAIL');
+	// $.writeln('[runQuickTimelineTest]\n' + summary);
+	// if (typeof alert === 'function') {
+	// 	try { alert(summary); } catch (e) { /* ignore */ }
+	// }
 	// ===== Option D: Export JSON / CSV nếu được yêu cầu =====
 	var exportResults = {};
 	if (ranges.length && (opts.exportJSONPath || opts.exportCSVPath)) {

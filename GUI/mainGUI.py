@@ -108,6 +108,13 @@ class AutoToolGUI(tk.Tk):
         notebook.add(tab_single, text="Đơn lẻ")
         notebook.add(tab_batch, text="Nhiều project")
 
+        # ------------------------------------------------------------------
+        style = ttk.Style()
+        style.configure(
+            "Custom.TButton",
+            font=("Segoe UI", 10, "bold")
+        )
+
         # --- Single tab content ---
         frm = ttk.Frame(tab_single, padding=10)
         frm.pack(fill="both", expand=True)
@@ -123,14 +130,8 @@ class AutoToolGUI(tk.Tk):
         ttk.Label(frm, text="Phiên bản Premiere:").grid(row=row, column=0, sticky="w", padx=pad, pady=2)
         ttk.Combobox(frm, textvariable=self.version_var, values=["2022", "2023", "2024", "2025"], width=12, state="readonly").grid(row=row, column=1, sticky="w", padx=pad, pady=2)
         row += 1
-        ttk.Label(frm, text="Chế độ chạy:").grid(row=row, column=0, sticky="w", padx=pad, pady=2)
-        ttk.Combobox(frm, textvariable=self.mode_var, values=["both", "video", "image"], width=12, state="readonly").grid(row=row, column=1, sticky="w", padx=pad, pady=2)
-        row += 1
         ttk.Label(frm, text="Số video / từ khoá:").grid(row=row, column=0, sticky="w", padx=pad, pady=2)
         ttk.Entry(frm, textvariable=self.videos_per_keyword_var, width=12).grid(row=row, column=1, sticky="w", padx=pad, pady=2)
-        row += 1
-        ttk.Label(frm, text="Số ảnh / từ khoá:").grid(row=row, column=0, sticky="w", padx=pad, pady=2)
-        ttk.Entry(frm, textvariable=self.images_per_keyword_var, width=12).grid(row=row, column=1, sticky="w", padx=pad, pady=2)
         row += 1
         ttk.Label(frm, text="Thời lượng tối đa (phút):").grid(row=row, column=0, sticky="w", padx=pad, pady=2)
         ttk.Entry(frm, textvariable=self.max_duration_var, width=12).grid(row=row, column=1, sticky="w", padx=pad, pady=2)
@@ -138,11 +139,21 @@ class AutoToolGUI(tk.Tk):
         ttk.Label(frm, text="Thời lượng tối thiểu (phút):").grid(row=row, column=0, sticky="w", padx=pad, pady=2)
         ttk.Entry(frm, textvariable=self.min_duration_var, width=12).grid(row=row, column=1, sticky="w", padx=pad, pady=2)
         row += 1
+        row += 1
+        ttk.Label(frm, text="Số ảnh / từ khoá:").grid(row=row, column=0, sticky="w", padx=pad, pady=2)
+        ttk.Entry(frm, textvariable=self.images_per_keyword_var, width=12).grid(row=row, column=1, sticky="w", padx=pad, pady=2)
+        row += 1
+        ttk.Label(frm, text="Chế độ chạy:").grid(row=row, column=0, sticky="w", padx=pad, pady=2)
+        ttk.Combobox(frm, textvariable=self.mode_var, values=["both", "video", "image"], width=12, state="readonly").grid(row=row, column=1, sticky="w", padx=pad, pady=2)
+        row += 1
+        # Regen links checkbox (moved from popup to main window)
+        ttk.Checkbutton(frm, text='Ép tạo lại link lần chạy sau', variable=self.regen_links_var).grid(row=row, column=0, sticky='w', padx=pad, pady=(2,0))
+        row += 1
         btn_frame = ttk.Frame(frm)
         btn_frame.grid(row=row, column=0, columnspan=3, sticky="w", padx=pad, pady=(12, 4))
         ttk.Button(btn_frame, text="Kiểm tra", command=self.validate_inputs).pack(side="left", padx=(0, 6))
-        ttk.Button(btn_frame, text="Chạy tự động", command=self.run_automation).pack(side="left", padx=6)
-        ttk.Button(btn_frame, text="Download Image", command=self.run_download_images).pack(side="left", padx=6)
+        ttk.Button(btn_frame, text="Run automation", style="Custom.TButton", command=self.run_automation).pack(side="left", padx=6)
+        # ttk.Button(btn_frame, text="Download Image", command=self.run_download_images).pack(side="left", padx=6)
         ttk.Button(btn_frame, text="Trạng thái link", command=self.open_links_status_window).pack(side="left", padx=6)
         ttk.Button(btn_frame, text="Xoá log", command=self.clear_log).pack(side="left", padx=6)
         row += 1
@@ -176,14 +187,8 @@ class AutoToolGUI(tk.Tk):
         ttk.Label(bfrm, text="Phiên bản Premiere:").grid(row=brow, column=0, sticky="w", padx=bpad, pady=2)
         ttk.Combobox(bfrm, textvariable=self.version_var, values=["2022", "2023", "2024", "2025"], width=12, state="readonly").grid(row=brow, column=1, sticky="w", padx=bpad, pady=2)
         brow += 1
-        ttk.Label(bfrm, text="Chế độ chạy:").grid(row=brow, column=0, sticky="w", padx=bpad, pady=2)
-        ttk.Combobox(bfrm, textvariable=self.mode_var, values=["both", "video", "image"], width=12, state="readonly").grid(row=brow, column=1, sticky="w", padx=bpad, pady=2)
-        brow += 1
         ttk.Label(bfrm, text="Số video / từ khoá:").grid(row=brow, column=0, sticky="w", padx=bpad, pady=2)
         ttk.Entry(bfrm, textvariable=self.videos_per_keyword_var, width=12).grid(row=brow, column=1, sticky="w", padx=bpad, pady=2)
-        brow += 1
-        ttk.Label(bfrm, text="Số ảnh / từ khoá:").grid(row=brow, column=0, sticky="w", padx=bpad, pady=2)
-        ttk.Entry(bfrm, textvariable=self.images_per_keyword_var, width=12).grid(row=brow, column=1, sticky="w", padx=bpad, pady=2)
         brow += 1
         ttk.Label(bfrm, text="Thời lượng tối đa (phút):").grid(row=brow, column=0, sticky="w", padx=bpad, pady=2)
         ttk.Entry(bfrm, textvariable=self.max_duration_var, width=12).grid(row=brow, column=1, sticky="w", padx=bpad, pady=2)
@@ -191,7 +196,17 @@ class AutoToolGUI(tk.Tk):
         ttk.Label(bfrm, text="Thời lượng tối thiểu (phút):").grid(row=brow, column=0, sticky="w", padx=bpad, pady=2)
         ttk.Entry(bfrm, textvariable=self.min_duration_var, width=12).grid(row=brow, column=1, sticky="w", padx=bpad, pady=2)
         brow += 1
-        ttk.Button(bfrm, text="Chạy hàng loạt", command=self.run_batch_automation).grid(row=brow, column=0, sticky="w", padx=bpad, pady=(10, 6))
+        brow += 1
+        ttk.Label(bfrm, text="Số ảnh / từ khoá:").grid(row=brow, column=0, sticky="w", padx=bpad, pady=2)
+        ttk.Entry(bfrm, textvariable=self.images_per_keyword_var, width=12).grid(row=brow, column=1, sticky="w", padx=bpad, pady=2)
+        brow += 1
+        ttk.Label(bfrm, text="Chế độ chạy:").grid(row=brow, column=0, sticky="w", padx=bpad, pady=2)
+        ttk.Combobox(bfrm, textvariable=self.mode_var, values=["both", "video", "image"], width=12, state="readonly").grid(row=brow, column=1, sticky="w", padx=bpad, pady=2)
+        brow += 1
+        # Regen links checkbox for batch (shared variable)
+        ttk.Checkbutton(bfrm, text='Ép tạo lại link lần chạy sau', variable=self.regen_links_var).grid(row=brow, column=0, sticky='w', padx=bpad, pady=(2,0))
+        brow += 1
+        ttk.Button(bfrm, text="Chạy hàng loạt", command=self.run_batch_automation, style="Custom.TButton").grid(row=brow, column=0, sticky="w", padx=bpad, pady=(10, 6))
 
     # ------------------------------------------------------------------
     # Utility methods
@@ -626,12 +641,9 @@ class AutoToolGUI(tk.Tk):
         ttk.Label(info_frame, text=f"Tổng link: {links}").grid(row=6, column=0, sticky='w')
 
         ttk.Separator(info_frame, orient='horizontal').grid(row=7, column=0, sticky='ew', pady=6)
-        regen_cb = ttk.Checkbutton(info_frame, text='Ép tạo lại link lần chạy sau', variable=self.regen_links_var)
-        regen_cb.grid(row=8, column=0, sticky='w')
-        ttk.Label(info_frame, text='(Bỏ chọn = dùng lại nếu có)').grid(row=9, column=0, sticky='w', pady=(0,4))
 
         btns = ttk.Frame(info_frame)
-        btns.grid(row=10, column=0, sticky='e', pady=(10,0))
+        btns.grid(row=8, column=0, sticky='e', pady=(10,0))
         ttk.Button(btns, text='Làm mới', command=lambda: self._refresh_links_window(win, project_dir, links_path, names_path)).pack(side='left', padx=(0,6))
         ttk.Button(btns, text='Đóng', command=win.destroy).pack(side='left')
 
@@ -660,11 +672,8 @@ class AutoToolGUI(tk.Tk):
         ttk.Label(info_frame, text=f"Số nhóm: {groups}").grid(row=5, column=0, sticky='w')
         ttk.Label(info_frame, text=f"Tổng link: {links}").grid(row=6, column=0, sticky='w')
         ttk.Separator(info_frame, orient='horizontal').grid(row=7, column=0, sticky='ew', pady=6)
-        regen_cb = ttk.Checkbutton(info_frame, text='Ép tạo lại link lần chạy sau', variable=self.regen_links_var)
-        regen_cb.grid(row=8, column=0, sticky='w')
-        ttk.Label(info_frame, text='(Bỏ chọn = dùng lại nếu có)').grid(row=9, column=0, sticky='w', pady=(0,4))
         btns = ttk.Frame(info_frame)
-        btns.grid(row=10, column=0, sticky='e', pady=(10,0))
+        btns.grid(row=8, column=0, sticky='e', pady=(10,0))
         ttk.Button(btns, text='Làm mới', command=lambda: self._refresh_links_window(win, project_dir, links_path, names_path)).pack(side='left', padx=(0,6))
         ttk.Button(btns, text='Đóng', command=win.destroy).pack(side='left')
 

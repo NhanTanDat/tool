@@ -98,7 +98,16 @@ class AutoToolGUI(tk.Tk):
 
     def _build_ui(self):
         pad = 8
-        main_frame = ttk.Frame(self, padding=10)
+
+        # Create notebook for tabs
+        notebook = ttk.Notebook(self)
+        notebook.pack(fill="both", expand=True)
+
+        # Tab 1: Automation (current content)
+        tab1 = ttk.Frame(notebook, padding=10)
+        notebook.add(tab1, text="Automation")
+
+        main_frame = ttk.Frame(tab1, padding=10)
         main_frame.pack(fill="both", expand=True)
 
         # ------------------------------------------------------------------
@@ -170,6 +179,11 @@ class AutoToolGUI(tk.Tk):
         self.log_text.configure(yscrollcommand=scroll.set)
         frm.columnconfigure(1, weight=1)
         frm.rowconfigure(row, weight=1)
+
+        # Tab 2: Future expansion
+        tab2 = ttk.Frame(notebook, padding=10)
+        notebook.add(tab2, text="Chờ")
+        ttk.Label(tab2, text="Tab này dành cho các tính năng mở rộng trong tương lai.", font=("Segoe UI", 12)).pack(pady=20)
 
     # ------------------------------------------------------------------
     # Utility methods

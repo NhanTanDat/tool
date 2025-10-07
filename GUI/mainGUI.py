@@ -43,7 +43,7 @@ class AutoToolGUI(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("AutoTool - Tự động hoá Premiere")
-        self.geometry("720x650")
+        self.geometry("900x650")
         self.resizable(False, False)
 
         self.version_var = tk.StringVar(value="2022")
@@ -107,7 +107,7 @@ class AutoToolGUI(tk.Tk):
 
         # Tab 1: Automation (current content)
         tab1 = ttk.Frame(notebook, padding=10)
-        notebook.add(tab1, text="Automation")
+        notebook.add(tab1, text="Auto Download")
 
         main_frame = ttk.Frame(tab1, padding=10)
         main_frame.pack(fill="both", expand=True)
@@ -124,7 +124,7 @@ class AutoToolGUI(tk.Tk):
         frm.pack(fill="both", expand=True)
         row = 0
         # Project selection section
-        ttk.Label(frm, text="Chọn file Premiere (.prproj):", font=("Segoe UI", 10, "bold")).grid(row=row, column=0, sticky="w", padx=pad, pady=(pad, 2))
+        ttk.Label(frm, text="Chọn file (.prproj):", font=("Segoe UI", 10, "bold")).grid(row=row, column=0, sticky="w", padx=pad, pady=(pad, 2))
         row += 1
         ttk.Button(frm, text="Thêm file...", command=self.add_batch_projects).grid(row=row, column=0, sticky="w", padx=pad, pady=(2, 2))
         ttk.Button(frm, text="Xoá đã chọn", command=self.remove_selected_batch).grid(row=row, column=1, sticky="w", padx=pad, pady=(2, 2))
@@ -167,7 +167,7 @@ class AutoToolGUI(tk.Tk):
         btn_frame = ttk.Frame(frm)
         btn_frame.grid(row=row, column=0, columnspan=3, sticky="w", padx=pad, pady=(12, 4))
         ttk.Button(btn_frame, text="Kiểm tra", command=self.validate_inputs).pack(side="left", padx=(0, 6))
-        ttk.Button(btn_frame, text="Chạy automation", style="Custom.TButton", command=self.run_batch_automation).pack(side="left", padx=6)
+        ttk.Button(btn_frame, text="Chạy Auto download", style="Custom.TButton", command=self.run_batch_automation).pack(side="left", padx=6)
         ttk.Button(btn_frame, text="Trạng thái link", command=self.open_links_status_window).pack(side="left", padx=6)
         ttk.Button(btn_frame, text="Xoá log", command=self.clear_log).pack(side="left", padx=6)
         row += 1
@@ -193,7 +193,7 @@ class AutoToolGUI(tk.Tk):
         frm2.pack(fill="both", expand=True)
         row2 = 0
         # Project selection section
-        ttk.Label(frm2, text="Chọn file Premiere (.prproj) để auto:", font=("Segoe UI", 10, "bold")).grid(row=row2, column=0, sticky="w", padx=pad, pady=(pad, 2))
+        ttk.Label(frm2, text="Chọn file (.prproj) để auto:", font=("Segoe UI", 10, "bold")).grid(row=row2, column=0, sticky="w", padx=pad, pady=(pad, 2))
         row2 += 1
         ttk.Button(frm2, text="Thêm file...", command=self.add_premier_projects).grid(row=row2, column=0, sticky="w", padx=pad, pady=(2, 2))
         ttk.Button(frm2, text="Xoá đã chọn", command=self.remove_selected_premier).grid(row=row2, column=1, sticky="w", padx=pad, pady=(2, 2))
@@ -209,7 +209,7 @@ class AutoToolGUI(tk.Tk):
         # Buttons
         btn_frame2 = ttk.Frame(frm2)
         btn_frame2.grid(row=row2, column=0, columnspan=3, sticky="w", padx=pad, pady=(12, 4))
-        ttk.Button(btn_frame2, text="Lấy từ tab Automation", command=self.copy_from_automation).pack(side="left", padx=(0, 6))
+        ttk.Button(btn_frame2, text="Lấy từ tab Download", command=self.copy_from_automation).pack(side="left", padx=(0, 6))
         ttk.Button(btn_frame2, text="Chạy Auto Premier", style="Custom.TButton", command=self.run_premier_automation).pack(side="left", padx=6)
         ttk.Button(btn_frame2, text="Xoá log", command=self.clear_log2).pack(side="left", padx=6)
         row2 += 1

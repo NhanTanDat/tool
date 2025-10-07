@@ -1,26 +1,27 @@
 from pywinauto import Application, Desktop
 from pywinauto.keyboard import send_keys
-from contextlib import redirect_stdout
-import pyperclip
 from time import sleep
-import os
-import sys
+
 
 
 
 #hàm này thực hiện mở vscode và chạy file runAll.jsx tự động
 def run_premier_script(premier_path, project_path, idx):
-    # Mở Adobe Premiere Pro thông qua tìm kiếm trong start menu
+    for w in Desktop(backend="uia").windows():
+        if "Adobe Premiere Pro" in w.window_text():
+            w.set_focus()
+            send_keys('^w')  # Đóng project hiện tại nếu có
+            sleep(2)
+            break
     app = Application(backend="uia").start(
         r'"C:\Program Files\Adobe\Adobe Premiere Pro 2022\Adobe Premiere Pro.exe"',
     )
-    sleep(15)  # Chờ một chút để Premiere Pro khởi động hoàn toàn
+    sleep(10)  # Chờ một chút để Premiere Pro khởi động hoàn toàn
     send_keys('^o')
     sleep(2)  # Chờ một chút để cửa sổ mở project xuất hiện
     #gõ đường dẫn project
     send_keys(project_path)
     send_keys('{ENTER}')
-    sleep(10)  # Chờ một chút để project được mở hoàn toàn
     sleep(5)  # Chờ một chút để project được mởpremierepro
     send_keys('{ESC}{ESC}{ESC}{ESC}{ESC}{ESC}{ESC}{ESC}{ESC}')
     sleep(5)
@@ -40,7 +41,7 @@ def run_premier_script(premier_path, project_path, idx):
 
     send_keys('^{F5}')  # Bấm F5 để chạy script
     send_keys('{ENTER}')
-    sleep(1)
+    sleep(2)
     send_keys('{ENTER}')
     sleep(1)
     send_keys('{ENTER}{ENTER}{ENTER}')

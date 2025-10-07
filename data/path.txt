@@ -1,4 +1,4 @@
-project_slug=3638
-data_folder=P:\coddd\autotool//data/3638
-project_path=C:/Users/phamp/Downloads/Copied_3638/Copied_3638/3638.prproj
-resource_dir=C:/Users/phamp/Downloads/Copied_3638/Copied_3638/resource
+project_slug=3571
+data_folder=p:/coddd/autotool/data/3571
+project_path=C:/Copied_3571/3571.prproj
+resource_dir=C:/Copied_3571/resource

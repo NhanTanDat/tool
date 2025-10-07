@@ -505,6 +505,9 @@ function runAll() {
         alert('Lỗi chạy cutAndPush.jsx: ' + e);
     }
 
+
+
+    
     // Done, save project
     try {
         app.project.save();

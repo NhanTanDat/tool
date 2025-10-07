@@ -8,7 +8,9 @@
  *  4) Cut & push clips using merged CSV (via cutAndPush.jsx auto-run)
  *
  * Reads data/path.txt with structure:
- *   { "resource_dir": "C:/path/to/resource", "project_slug": "3571" }
+ *   project_slug=3638
+ *   data_folder=p:/coddd/autotool/data/3638
+ *   project_path=C:/Users/phamp/Downloads/Copied_3638/Copied_3638/3638.prproj
  * You can also call runAll(projectName) to override project_slug and target subfolder under /data.
  * Alternatively, define global RUNALL_PROJECT_NAME before eval to override.
  */
@@ -443,14 +445,15 @@ function readPathConfig() {
 }
 
 // ===== Orchestrate =====
-function runAll(projectPath) {
-
-    
+function runAll() {
+    var projectPath = '';
+    var projectName = '';
+    var parentPath = '';
     var cfg = readPathConfig();
     if (!cfg) return;
     
     // Add project_path to config
-    cfg['project_path'] = projectPath;
+    projectPath = cfg['project_path'];
     
     projectName = projectPath.split('/').pop();
     parentPath = projectPath.substr(0, projectPath.length - projectName.length - 1); 
@@ -524,4 +527,4 @@ function runAll(projectPath) {
 }
 
 // Execute
-runAll("C:/Users/phamp/Downloads/Copied_3638/Copied_3638/3638.prproj");
+runAll();

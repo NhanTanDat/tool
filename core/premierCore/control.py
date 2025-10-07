@@ -9,7 +9,7 @@ import sys
 
 
 #hàm này thực hiện mở vscode và chạy file runAll.jsx tự động
-def run_premier_script(premier_path, project_path):
+def run_premier_script(premier_path, project_path, idx):
     # Mở Adobe Premiere Pro thông qua tìm kiếm trong start menu
     app = Application(backend="uia").start(
         r'"C:\Program Files\Adobe\Adobe Premiere Pro 2022\Adobe Premiere Pro.exe"',
@@ -26,7 +26,12 @@ def run_premier_script(premier_path, project_path):
     sleep(5)
     send_keys('{ESC}{ESC}{ESC}{ESC}{ESC}{ESC}{ESC}{ESC}{ESC}')
     sleep(2)
-    send_keys('%{TAB}') #quay lại vscode
+    #tab sang cửa sổ vscode, tab cho đến khi thấy cửa sổ vscode hiện lên
+    for w in Desktop(backend="uia").windows():
+        if "Visual Studio Code" in w.window_text():
+            w.set_focus()
+            break
+
 
     #bấm ctrl+e mở go to file
     send_keys('^e')
@@ -34,12 +39,19 @@ def run_premier_script(premier_path, project_path):
     send_keys('{ENTER}')
 
     send_keys('^{F5}')  # Bấm F5 để chạy script
-    sleep(5)
-    send_keys('{ENTER}{ENTER}{ENTER}{ENTER}')
-    send_keys('^z^z')
+    send_keys('{ENTER}')
+    sleep(1)
+    send_keys('{ENTER}')
+    sleep(1)
+    send_keys('{ENTER}{ENTER}{ENTER}')
+    send_keys('^z^z^z^z')
+    sleep(0.5)
 
     #quay lại cửa sổ premier
-    send_keys('%{TAB}')
+    for w in Desktop(backend="uia").windows():
+        if "Adobe Premiere Pro" in w.window_text():
+            w.set_focus()
+            break
 
     #liên tục spam nút esc để tắt hết các popup
     while True:

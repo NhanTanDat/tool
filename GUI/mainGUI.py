@@ -56,6 +56,7 @@ class AutoToolGUI(tk.Tk):
         self.min_duration_var = tk.StringVar(value="4")   # mặc định tối thiểu 4 phút
         # Batch projects list
         self.batch_projects: list[str] = []
+        self.premier_projects: list[str] = []
 
         # Prevent saving while loading initial config
         self._loading_config = True
@@ -71,6 +72,7 @@ class AutoToolGUI(tk.Tk):
         # Populate batch list UI if loaded from config
         try:
             self._refresh_batch_listbox()
+            self._refresh_premier_listbox()
         except Exception:
             pass
 
@@ -180,10 +182,47 @@ class AutoToolGUI(tk.Tk):
         frm.columnconfigure(1, weight=1)
         frm.rowconfigure(row, weight=1)
 
-        # Tab 2: Future expansion
+        # Tab 2: Auto Premier
         tab2 = ttk.Frame(notebook, padding=10)
-        notebook.add(tab2, text="Chờ")
-        ttk.Label(tab2, text="Tab này dành cho các tính năng mở rộng trong tương lai.", font=("Segoe UI", 12)).pack(pady=20)
+        notebook.add(tab2, text="Auto Premier")
+
+        main_frame2 = ttk.Frame(tab2, padding=10)
+        main_frame2.pack(fill="both", expand=True)
+
+        frm2 = ttk.Frame(main_frame2, padding=10, relief="groove")
+        frm2.pack(fill="both", expand=True)
+        row2 = 0
+        # Project selection section
+        ttk.Label(frm2, text="Chọn file Premiere (.prproj) để auto:", font=("Segoe UI", 10, "bold")).grid(row=row2, column=0, sticky="w", padx=pad, pady=(pad, 2))
+        row2 += 1
+        ttk.Button(frm2, text="Thêm file...", command=self.add_premier_projects).grid(row=row2, column=0, sticky="w", padx=pad, pady=(2, 2))
+        ttk.Button(frm2, text="Xoá đã chọn", command=self.remove_selected_premier).grid(row=row2, column=1, sticky="w", padx=pad, pady=(2, 2))
+        row2 += 1
+        self.premier_list = tk.Listbox(frm2, height=8, selectmode="extended")
+        self.premier_list.grid(row=row2, column=0, columnspan=2, sticky="nsew", padx=pad, pady=(2, 6))
+        pscroll = ttk.Scrollbar(frm2, orient="vertical", command=self.premier_list.yview)
+        pscroll.grid(row=row2, column=2, sticky="ns", pady=(2, 6))
+        self.premier_list.configure(yscrollcommand=pscroll.set)
+        frm2.columnconfigure(0, weight=1)
+        row2 += 1
+
+        # Buttons
+        btn_frame2 = ttk.Frame(frm2)
+        btn_frame2.grid(row=row2, column=0, columnspan=3, sticky="w", padx=pad, pady=(12, 4))
+        ttk.Button(btn_frame2, text="Lấy từ tab Automation", command=self.copy_from_automation).pack(side="left", padx=(0, 6))
+        ttk.Button(btn_frame2, text="Chạy Auto Premier", style="Custom.TButton", command=self.run_premier_automation).pack(side="left", padx=6)
+        ttk.Button(btn_frame2, text="Xoá log", command=self.clear_log2).pack(side="left", padx=6)
+        row2 += 1
+
+        # Log section (shared with tab1)
+        ttk.Label(frm2, text="Nhật ký:", font=("Segoe UI", 10, "bold")).grid(row=row2, column=0, sticky="nw", padx=pad, pady=(12, 2))
+        self.log_text2 = tk.Text(frm2, height=10, wrap="word")
+        self.log_text2.grid(row=row2, column=1, columnspan=2, sticky="nsew", padx=pad, pady=(12, 2))
+        scroll2 = ttk.Scrollbar(frm2, orient="vertical", command=self.log_text2.yview)
+        scroll2.grid(row=row2, column=3, sticky="ns", pady=(12, 2))
+        self.log_text2.configure(yscrollcommand=scroll2.set)
+        frm2.columnconfigure(1, weight=1)
+        frm2.rowconfigure(row2, weight=1)
 
     # ------------------------------------------------------------------
     # Utility methods
@@ -192,8 +231,15 @@ class AutoToolGUI(tk.Tk):
         self.log_text.insert("end", msg + "\n")
         self.log_text.see("end")
 
+    def log2(self, msg: str):
+        self.log_text2.insert("end", msg + "\n")
+        self.log_text2.see("end")
+
     def clear_log(self):
         self.log_text.delete("1.0", "end")
+
+    def clear_log2(self):
+        self.log_text2.delete("1.0", "end")
 
     # ------------------------------------------------------------------
     # Validation & folder ops
@@ -465,6 +511,104 @@ class AutoToolGUI(tk.Tk):
         except Exception:
             pass
 
+    # ------------------------------------------------------------------
+    # Premier helpers
+    # ------------------------------------------------------------------
+    def add_premier_projects(self):
+        files = filedialog.askopenfilenames(title="Chọn nhiều file .prproj", filetypes=[("Premiere Project", "*.prproj"), ("All files", "*.*")])
+        if not files:
+            return
+        added = 0
+        for f in files:
+            if f not in self.premier_projects:
+                self.premier_projects.append(f)
+                self.premier_list.insert("end", f)
+                added += 1
+        self.log2(f"Đã thêm {added} project vào danh sách premier.")
+
+    def remove_selected_premier(self):
+        sel = list(self.premier_list.curselection())
+        if not sel:
+            return
+        sel.reverse()
+        for idx in sel:
+            try:
+                path = self.premier_list.get(idx)
+            except Exception:
+                path = None
+            try:
+                self.premier_list.delete(idx)
+            except Exception:
+                pass
+            if path and path in self.premier_projects:
+                try:
+                    self.premier_projects.remove(path)
+                except Exception:
+                    pass
+        self.log2("Đã xoá mục đã chọn khỏi danh sách premier.")
+
+    def copy_from_automation(self):
+        self.premier_projects = list(self.batch_projects)
+        self._refresh_premier_listbox()
+        self.log2(f"Đã sao chép {len(self.premier_projects)} project từ tab Automation.")
+
+    def run_premier_automation(self):
+        try:
+            import importlib
+            from core.premierCore.control import run_premier_script  # type: ignore
+        except Exception:
+            try:
+                import importlib
+                run_premier_script = importlib.import_module("core.premierCore.control").run_premier_script  # type: ignore
+            except Exception as e:
+                self.log2(f"LỖI: Không thể import run_premier_script: {e}")
+                run_premier_script = None
+        if not self.premier_projects:
+            messagebox.showwarning("Premier", "Chưa có file .prproj nào trong danh sách.")
+            return
+        if run_premier_script is None:
+            self.log2("LỖI: Không thể import run_premier_script từ control.py")
+            return
+        self.log2(f"=== BẮT ĐẦU CHẠY PREMIER AUTOMATION ({len(self.premier_projects)} project) ===")
+        num = 0
+        for i, proj_path in enumerate(self.premier_projects, start=1):
+            try:
+                self.log2(f"-- ({i}/{len(self.premier_projects)}) {proj_path}")
+                # Update path.txt
+                project_slug = self._derive_project_slug(proj_path)
+                data_folder = os.path.join(DATA_DIR, project_slug).replace('\\', '/')
+                project_path_unix = proj_path.replace('\\', '/')
+                resource_dir = os.path.join(os.path.dirname(proj_path), 'resource').replace('\\', '/')
+                path_txt_content = f"project_slug={project_slug}\ndata_folder={data_folder}\nproject_path={project_path_unix}\nresource_dir={resource_dir}\n"
+                path_txt_path = os.path.join(DATA_DIR, 'path.txt')
+                try:
+                    with open(path_txt_path, 'w', encoding='utf-8') as f:
+                        f.write(path_txt_content)
+                    self.log2(f"Đã cập nhật path.txt cho {project_slug}")
+                except Exception as e:
+                    self.log2(f"LỖI khi ghi path.txt: {e}")
+                    continue
+                # Run premier script
+                proj_path = proj_path.replace('/', '\\')
+                num += 1
+                run_premier_script(None, proj_path, num)
+                self.update()
+            except Exception as e:
+                self.log2(f"LỖI premier item: {e}")
+        self.log2("=== KẾT THÚC PREMIER AUTOMATION ===")
+        try:
+            self._save_config()
+        except Exception:
+            pass
+
+    def _refresh_premier_listbox(self):
+        try:
+            self.premier_list.delete(0, 'end')
+            for item in self.premier_projects:
+                self.premier_list.insert('end', item)
+        except Exception:
+            pass
+
     def run_download_images(self):
         if not self.batch_projects:
             self.log("LỖI: Chưa chọn file .prproj nào.")
@@ -626,6 +770,7 @@ class AutoToolGUI(tk.Tk):
                 'min_duration': self.min_duration_var.get().strip(),
                 'regen_links': bool(self.regen_links_var.get()),
                 'batch_projects': list(self.batch_projects) if isinstance(self.batch_projects, list) else [],
+                'premier_projects': list(self.premier_projects) if isinstance(self.premier_projects, list) else [],
             }
             os.makedirs(os.path.dirname(CONFIG_PATH), exist_ok=True)
             with open(CONFIG_PATH, 'w', encoding='utf-8') as f:
@@ -670,6 +815,8 @@ class AutoToolGUI(tk.Tk):
                     pass
             if 'batch_projects' in cfg and isinstance(cfg['batch_projects'], list):
                 self.batch_projects = [str(x) for x in cfg['batch_projects']]
+            if 'premier_projects' in cfg and isinstance(cfg['premier_projects'], list):
+                self.premier_projects = [str(x) for x in cfg['premier_projects']]
         except Exception as e:
             try:
                 self.log(f"CẢNH BÁO: Không áp dụng được config: {e}")

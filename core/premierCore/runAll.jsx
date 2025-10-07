@@ -444,6 +444,8 @@ function readPathConfig() {
 
 // ===== Orchestrate =====
 function runAll(projectPath) {
+
+    
     var cfg = readPathConfig();
     if (!cfg) return;
     
@@ -499,6 +501,26 @@ function runAll(projectPath) {
     } catch (e) {
         alert('Lỗi chạy cutAndPush.jsx: ' + e);
     }
+
+    // Done, save project
+    try {
+        app.project.save();
+        $.writeln('[runAll] Project saved.');
+    } catch (e) {
+        $.writeln('[runAll] Error saving project: ' + e);
+    }
+
+    //close premiere
+    try {
+        app.quit();
+        $.writeln('[runAll] Premiere closed.');
+    } catch (e) {
+        $.writeln('[runAll] Error closing Premiere: ' + e);
+    }
+    
+
+    
+    
 }
 
 // Execute

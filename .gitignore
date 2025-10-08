@@ -7,6 +7,8 @@
 *.csv
 *.json
 *.xml
+.installed
 # # Allow tracking everything under data/ despite the above global ignores
 # !data/
 !data/path.txt
+!.vscode/*.json

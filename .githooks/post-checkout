@@ -1,0 +1,21 @@
+@echo off
+REM Kiểm tra nếu đã cài dependencies (file marker .installed)
+if exist .installed (
+    echo Dependencies already installed. Skipping pip install.
+    exit /b 0
+)
+
+echo Installing Python dependencies...
+REM tạo .venv nếu chưa có
+if not exist venv (
+    python -m venv venv
+)
+call .venv\Scripts\activate  # Thay 'venv' bằng tên thư mục
+pip install -r requirements.txt
+if %errorlevel% equ 0 (
+    echo Dependencies installed successfully.
+    REM Tạo file marker để tránh chạy lại
+    echo. > .installed
+) else (
+    echo Failed to install dependencies.
+)

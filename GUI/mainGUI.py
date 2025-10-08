@@ -589,7 +589,7 @@ class AutoToolGUI(tk.Tk):
                     self.log2(f"LỖI khi ghi path.txt: {e}")
                     continue
                 # Run premier script
-                proj_path = proj_path.replace('/', '\\')
+                proj_path = '\"' + proj_path.replace('/', '\\') + '\"'  # ensure backslashes for Windows paths
                 num += 1
                 run_premier_script(None, proj_path, num)
                 self.update()

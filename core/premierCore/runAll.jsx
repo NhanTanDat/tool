@@ -79,6 +79,7 @@ function log(msg) {
 function joinPath(a, b) {
     if (!a || a === '') return b || '';
     if (!b || b === '') return a || '';
+    
     var s = a.charAt(a.length - 1);
     return s === '/' || s === '\\' ? a + b : a + '/' + b;
 }
@@ -518,14 +519,15 @@ function runAll() {
 
     //close premiere
     try {
+
         app.quit();
         $.writeln('[runAll] Premiere closed.');
     } catch (e) {
         $.writeln('[runAll] Error closing Premiere: ' + e);
     }
-    
 
-    
+    $.writeln('[runAll] All done.');
+    return;   
     
 }
 

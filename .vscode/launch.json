@@ -1,0 +1,12 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Run ExtendScript in Premiere Pro 2022",
+            "type": "extendscript-debug",
+            "request": "launch",
+            "script": "${file}",
+            "hostAppSpecifier": "premiere-22.0"
+        }
+    ]
+}

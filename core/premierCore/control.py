@@ -11,30 +11,20 @@ def copy_paste(path):
     send_keys('^v')
 
 
-def remove_exist_session():
-    import psutil
-
-    for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
-        try:
-            if proc.info['name'] == "Code.exe" and any("runAll.jsx" in arg for arg in proc.info['cmdline']):
-                proc.kill()
-                print(f"Existing runAll.jsx session terminated (PID: {proc.pid})")
-        except (psutil.NoSuchProcess, psutil.AccessDenied):
-            continue
-
-
 #hàm này thực hiện mở vscode và chạy file runAll.jsx tự động
 def run_premier_script(premier_path, project_path, idx):
-    remove_exist_session()
+    app = None
     for w in Desktop(backend="uia").windows():
         if "Adobe Premiere Pro" in w.window_text():
+            app = Application(backend="uia").connect(title_re=".*Adobe Premiere Pro.*")
             w.set_focus()
-            send_keys('^w')  # Đóng project hiện tại nếu có
-            sleep(2)
+            send_keys('^s')
             break
-    app = Application(backend="uia").start(
-        r'"C:\Program Files\Adobe\Adobe Premiere Pro 2022\Adobe Premiere Pro.exe"',
-    )
+    if not app:
+        print("Premiere Pro is not running.")
+        app = Application(backend="uia").start(
+            r'"C:\Program Files\Adobe\Adobe Premiere Pro 2022\Adobe Premiere Pro.exe"',
+        )
     sleep(10)  # Chờ một chút để Premiere Pro khởi động hoàn toàn
     send_keys('^o')
     sleep(2)  # Chờ một chút để cửa sổ mở project xuất hiện
@@ -59,12 +49,6 @@ def run_premier_script(premier_path, project_path, idx):
     send_keys('{ENTER}')
 
     send_keys('^{F5}')  # Bấm F5 để chạy script
-    send_keys('{ENTER}')
-    sleep(2)
-    send_keys('{ENTER}')
-    sleep(1)
-    send_keys('{ENTER}{ENTER}{ENTER}')
-    send_keys('^z^z^z^z')
     sleep(0.5)
 
     #quay lại cửa sổ premier
@@ -87,16 +71,10 @@ def run_premier_script(premier_path, project_path, idx):
             break
     print("Script execution completed.")
 
-    #quay lại cửa sổ vscode, tìm runAll.jsx và ngắt debug
-    remove_exist_session()
-    for w in Desktop(backend="uia").windows():
-        if "Visual Studio Code" in w.window_text():
-            w.set_focus()
-            break
-    send_keys('^e')
-    send_keys('runAll.jsx')
-    send_keys('{ENTER}')
-    send_keys('^{F5}')  # Bấm F5 để ngắt debug
+    #đóng session premier
+    if app:
+        app.close()
+        print("Premiere Pro session closed.")
 
 #test
 if __name__ == "__main__":

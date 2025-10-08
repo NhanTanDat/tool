@@ -6,7 +6,7 @@
             "type": "extendscript-debug",
             "request": "launch",
             "script": "${file}",
-            "hostAppSpecifier": "premiere-22.0"
+            "hostAppSpecifier": "premierepro-22.0"
         }
     ]
 }

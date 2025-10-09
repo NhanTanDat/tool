@@ -2,6 +2,7 @@ from pywinauto import Application, Desktop
 from pywinauto.keyboard import send_keys
 from time import sleep
 import pyperclip
+import os
 
 
 def copy_paste(path):
@@ -13,6 +14,7 @@ def copy_paste(path):
 
 #hàm này thực hiện mở vscode và chạy file runAll.jsx tự động
 def run_premier_script(premier_path, project_path, idx):
+    os.system('taskkill /IM "Adobe Premiere Pro.exe" /F')
     app = None
     for w in Desktop(backend="uia").windows():
         if "Adobe Premiere Pro" in w.window_text():
@@ -48,8 +50,15 @@ def run_premier_script(premier_path, project_path, idx):
     send_keys('runAll.jsx')
     send_keys('{ENTER}')
 
-    send_keys('^{F5}')  # Bấm F5 để chạy script
+    send_keys('^+p')
+    sleep(1)
+    copy_paste('ExtendScript: Evaluate Script inn Attached Host')
     sleep(0.5)
+    send_keys('{ENTER}')  # Nhấn Enter để chọn lệnh
+    sleep(0.5)
+    copy_paste('Adobe Premiere Pro 2022')
+    sleep(0.5)
+    send_keys('{ENTER}')  # Nhấn Enter để chọn lệnh
 
     #quay lại cửa sổ premier
     for w in Desktop(backend="uia").windows():
@@ -70,6 +79,12 @@ def run_premier_script(premier_path, project_path, idx):
             print("No more popups to close.")
             break
     print("Script execution completed.")
+
+    #dọn dẹp tài nguyên
+    for w in Desktop(backend="uia").windows():
+        if "Visual Studio Code" in w.window_text():
+            w.set_focus()
+            break
 
     #đóng session premier
     if app:

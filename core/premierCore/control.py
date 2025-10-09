@@ -52,7 +52,7 @@ def run_premier_script(premier_path, project_path, idx):
 
     send_keys('^+p')
     sleep(1)
-    copy_paste('ExtendScript: Evaluate Script inn Attached Host')
+    copy_paste('ExtendScript: Evaluate Script in Attached Host')
     sleep(0.5)
     send_keys('{ENTER}')  # Nhấn Enter để chọn lệnh
     sleep(0.5)

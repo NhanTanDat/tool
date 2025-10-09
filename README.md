@@ -7,213 +7,163 @@ Ngôn ngữ: Vietnamese (có thể chuyển sang English nếu cần). Đây là
 2. Import tài nguyên media hàng loạt vào Premiere (ExtendScript `.jsx`).
 3. Xuất metadata timeline (clip start/end) từ Premiere ra CSV.
 4. Đọc CSV timeline và tự động cắt – chèn subclip vào sequence.
-5. Chạy các script `.jsx` trực tiếp từ Python thông qua COM (`run_jsx.py`).
+5. Chạy các script `.jsx` trực tiếp từ Python thông qua COM.
 
 Thư mục chính quan trọng:
 - `core/downloadTool/` – công cụ lấy link (`get_link.py`).
-- `core/premierCore/` – các script Premiere: `getTimeline.jsx`, `cutAndPush.jsx`, `importResource.jsx`, `run_jsx.py`.
+- `core/premierCore/` – các script Premiere: `getTimeline.jsx`, `cutAndPush.jsx`, `importResource.jsx`.
 - `data/` – nơi tập trung input/output (tự tạo nếu chưa có).
 
 ------------------------------------------------------------
-YÊU CẦU HỆ THỐNG / DEPENDENCIES
+CÀI ĐẶT
 ------------------------------------------------------------
 
-Phần mềm bắt buộc:
-1. Windows 10/11.
-2. Python 3.10+.
-3. Google Chrome (bản mới).
-4. ChromeDriver (thường Selenium Manager tự xử lý khi dùng Selenium 4, nếu cần thủ công thì tải phù hợp version Chrome và để trong PATH).
-5. Adobe Premiere Pro (phiên bản hỗ trợ ExtendScript – các bản CC vẫn hỗ trợ). 
-6. CMake
-7. VS build tools (nếu cài `face_recognition`).
-Premiere phải đang mở khi chạy các lệnh liên quan `.jsx`.
+### Yêu cầu cần cài đặt
 
-Tạo môi trường ảo (khuyến nghị):
-```
-python -m venv venv
-.\venv\Scripts\activate
+1. **Python 3.10**
+   - Tải và cài đặt từ [python.org](https://www.python.org/downloads/)
+   - Chọn phiên bản Python 3.10.x
+   - Trong quá trình cài đặt, nhớ tích "Add Python to PATH"
+
+2. **VS Code (Visual Studio Code)**
+   - Tải và cài đặt từ [code.visualstudio.com](https://code.visualstudio.com/)
+   - Khuyến nghị cài thêm extension: Python, Prettier
+
+3. **Git**
+   - Tải và cài đặt từ [git-scm.com](https://git-scm.com/downloads)
+   - Git được dùng để lấy code mới và quản lý phiên bản
+
+4. **Adobe Premiere Pro**
+   - Cần phiên bản hỗ trợ ExtendScript (các bản CC đều hỗ trợ)
+
+5. **Trình duyệt Chrome**
+   - Dùng cho Selenium thu thập link YouTube
+
+6. **ExtendScript Debugger for VS Code**
+   - Cài từ [marketplace.visualstudio.com](https://marketplace.visualstudio.com/items?itemName=Adobe.extendscript-debug)
+   - Dùng để debug các file `.jsx` trong VS Code
+------------------------------------------------------------
+
+### Các bước cài đặt
+
+**Bước 1:** Mở PowerShell với quyền quản trị và chạy lệnh sau để cho phép chạy script:
+```powershell
+Set-ExecutionPolicy RemoteSigned -Scope CurrentUser
 ```
 
-Python packages (cài qua pip):
+**Bước 2:** Clone repository (nếu chưa có):
+```bash
+git clone <repository-url>
+cd autotool
 ```
-pip install -r requirements.txt
+
+**Bước 3:** Chạy file setup tự động:
+```cmd
+setup.bat
 ```
-Tùy chọn thêm (nếu mở rộng):
+
+File `setup.bat` sẽ tự động:
+- Tạo môi trường ảo Python (virtual environment)
+- Cài đặt tất cả các thư viện cần thiết từ `requirements.txt`
+- Thiết lập cấu trúc thư mục cần thiết
+
+**Lưu ý:**
+- Nếu gặp lỗi khi chạy `setup.bat`, hãy đảm bảo Python 3.10 đã được thêm vào PATH
+- Kiểm tra bằng cách chạy: `python --version` trong Command Prompt
+
+------------------------------------------------------------
+SỬ DỤNG
+------------------------------------------------------------
+
+### 1. Thu thập link YouTube
+
+Chạy GUI chính của ứng dụng:
+```cmd
+python GUI/mainGUI.py
 ```
-pip install watchdog rich
+
+Trong giao diện:
+- `parent_folder`: thư mục sẽ chứa video
+- `project_path`: đường dẫn đến file `.prproj` của Premiere
+- `link_list_path`: nơi lưu link thu thập được
+
+### 2. Import media vào Premiere
+
+Script `importResource.jsx` sẽ tự động:
+- Tạo Bin cho mỗi thư mục con
+- Import toàn bộ file media vào Bin tương ứng
+
+Ví dụ cấu trúc thư mục:
 ```
+E:\mediaTopics\
+    Amber_Portwood_tiktok\  (chứa nhiều .mp4)
+    cat_clips\
+    tutorial_segments\
+```
+
+### 3. Xuất timeline ra CSV
+
+Script `getTimeline.jsx`:
+- Xuất metadata của các clip đã chọn
+- Lưu thành `timeline_export.csv` và `timeline_export.json`
+
+Cách sử dụng:
+1. Mở sequence trong Premiere
+2. Chọn các clip cần xuất
+3. Chạy script (tự động qua Python hoặc thủ công)
+
+### 4. Tự động cắt & chèn clip
+
+Script `cutAndPush.jsx`:
+- Đọc file CSV timeline
+- Tự động cắt và chèn subclip vào sequence
+- Sử dụng clip ngẫu nhiên từ các Bin
+
 
 ------------------------------------------------------------
 CẤU TRÚC DỮ LIỆU & THƯ MỤC `data/`
 ------------------------------------------------------------
 
-`data/` được dùng để:
-- Input từ khóa: `list_name.txt` (mỗi dòng 1 keyword).
-- Output link đã thu thập: `dl_links.txt`.
-- Các file export timeline: `timeline_export.csv`, `timeline_export.json` (từ `getTimeline.jsx`).
-- File timeline đã merge hoặc đã xử lý: `timeline_export_merged.csv` (hoặc tên bạn đặt – script cắt đọc CSV).
+Thư mục `data/` chứa:
+- `list_name.txt` – danh sách từ khóa tìm kiếm (mỗi dòng 1 keyword)
+- `dl_links.txt` – link video đã thu thập
+- `timeline_export.csv` / `.json` – metadata timeline từ Premiere
+- `timeline_export_merged.csv` – timeline đã xử lý (tùy chọn)
 
-Nếu chưa có thư mục `data/`, các script sẽ tự tạo (ở cấp root repo hoặc cạnh script tùy logic dynamic path).
-
-------------------------------------------------------------
-1. THU THẬP LINK YOUTUBE (`get_link.py`)
-------------------------------------------------------------
-
-chạy GUI:
-parent_folder là thư mục sẽ chứa video
-project_path là đường dẫn đến file proprej
-link_list_path là nơi lưu link thu thập
-```
-Ghi chú:
-- Script tự scroll 1 lần để lấy thêm kết quả.
-- Giới hạn ~20 link đầu mỗi keyword (có thể chỉnh trong mã: lát cắt `[:20]`).
+Thư mục sẽ tự động được tạo nếu chưa có.
 
 ------------------------------------------------------------
-2. IMPORT MEDIA VÀO PREMIERE (`importResource.jsx`)
+QUY TRÌNH LÀM VIỆC (END-TO-END)
 ------------------------------------------------------------
 
-Mục tiêu: mỗi thư mục con bên trong một thư mục cha -> tạo một Bin trùng tên và import toàn bộ file trực tiếp (không đệ quy sâu hơn).
+1. Tạo danh sách từ khóa trong `data/list_name.txt`
+2. Chạy GUI để thu thập link: `python GUI/mainGUI.py`
+3. Tải media về và sắp xếp vào các thư mục theo chủ đề
+4. Mở Premiere Pro và project của bạn
+5. Import media tự động (script sẽ chạy qua COM)
+6. Chọn clip và xuất timeline
+7. Chạy script tự động cắt & chèn clip
+8. Kiểm tra và tinh chỉnh trong Premiere
 
-Ví dụ bạn có cấu trúc:
-```
-E:\mediaTopics\
-	Amber_Portwood_tiktok\  (chứa nhiều .mp4)
-	cat_clips\
-	tutorial_segments\
-```
-
-Sửa cuối file `importResource.jsx` (hoặc inject thủ công) đường dẫn test:
-```jsx
-importMultipleFolders("E:/mediaTopics");
-```
-
-Chạy trong Premiere:
-1. Mở Premiere + Project mong muốn.
-2. Mở ExtendScript Toolkit / hoặc bảng Scripts / hoặc dùng công cụ khác cho phép chạy JSX.
-3. Load và chạy file `importResource.jsx`.
-4. Kiểm tra Project Panel: mỗi thư mục con -> một Bin, file mới được thêm (file trùng tên bỏ qua).
-
-Chạy qua Python (tùy chọn) dùng tiện ích `run_jsx.py` (xem phần 5).
 
 ------------------------------------------------------------
-3. XUẤT TIMELINE RA CSV (`getTimeline.jsx`)
+TROUBLESHOOTING (XỬ LÝ LỖI)
 ------------------------------------------------------------
 
-Script thực hiện:
-- Tìm các video track có clip đang được chọn.
-- Lấy track có index lớn nhất (ở trên cùng trong UI) trong số đó.
-- Thu thập metadata clip: name, startSeconds, endSeconds, in/out...
-- Ghi ra `data/timeline_export.csv` và `data/timeline_export.json`.
+| Vấn đề | Nguyên nhân | Cách xử lý |
+|--------|-------------|------------|
+| Không chạy được JSX | Premiere chưa mở / lỗi COM | Mở Premiere trước, kiểm tra Python 64-bit |
+| "Invalid class string" | ProgID COM không đúng | Xem chi tiết lỗi để biết ProgID phù hợp |
+| Không tạo clip nào | Không tìm thấy Bin | Kiểm tra tên Bin khớp với CSV (space → `_`) |
+| CSV rỗng khi export | Chưa chọn clip | Chọn ít nhất 1 clip trước khi export |
+| Lỗi tiếng Việt | Unicode trong path | Dùng đường dẫn không dấu |
+| setup.bat không chạy | Python chưa có trong PATH | Cài lại Python, tích "Add to PATH" |
 
-Chuẩn bị trước khi chạy:
-1. Mở sequence đúng.
-2. Chọn ít nhất một clip trên track mong muốn (script dựa vào selection để xác định track).
-3. Chạy `getTimeline.jsx`.
+**Lưu ý về COM (Windows):**
+- Đảm bảo Python 64-bit nếu Premiere là 64-bit
+- Kiểm tra Python version: `python --version`
+- Kiểm tra architecture: `python -c "import platform; print(platform.architecture())"`
 
-Output CSV (ví dụ cột chính):
-```
-name,startSeconds,endSeconds,inPointSeconds,outPointSeconds,textContent
-Clip A,0.0,5.2,0.0,5.2,
-Clip B,5.2,9.7,0.0,4.5,
-```
-
-------------------------------------------------------------
-4. TỰ ĐỘNG CẮT & CHÈN CLIP (`cutAndPush.jsx`)
-------------------------------------------------------------
-
-Chức năng:
-- Đọc một file CSV timeline (hiện tại hỗ trợ duy nhất CSV).
-- Với mỗi entry có textContent -> coi đó là tên Bin (space chuyển thành `_`).
-- Lặp chèn subclip ngẫu nhiên (3–4 giây) để phủ kín khoảng thời gian của entry.
-- Sử dụng strictly thời gian dạng giây (không dùng ticks).
-
-Cấu hình mặc định cuối file:
-```jsx
-var csvDef = joinPath(DATA_FOLDER, 'timeline_export_merged.csv');
-cutAndPushAllTimeline(csvDef);
-```
-Bạn có thể đổi thành `timeline_export.csv` nếu muốn dùng trực tiếp mà không merge.
-
-Yêu cầu trước khi chạy:
-1. Các Bin phải tồn tại (tên khớp textContent đã được chuẩn hóa thành `_`).
-2. Đã import media.
-3. Đã có `timeline_export_merged.csv` hoặc `timeline_export.csv` trong `data/`.
-
-Nếu muốn chạy thủ công:
-1. Mở Premiere + sequence.
-2. Chạy `cutAndPush.jsx`.
-3. Quan sát track trên cùng được chèn clip.
-
-------------------------------------------------------------
-5. CHẠY JSX TỪ PYTHON (`run_jsx.py`)
-------------------------------------------------------------
-
-Tiện ích tổng quát chạy một hoặc nhiều file `.jsx` trong Premiere (qua COM):
-
-Ví dụ chạy đơn:
-```
-python core/premierCore/run_jsx.py core/premierCore/getTimeline.jsx
-```
-
-Chạy nhiều file nối tiếp:
-```
-python core/premierCore/run_jsx.py core/premierCore/importResource.jsx core/premierCore/getTimeline.jsx core/premierCore/cutAndPush.jsx
-```
-
-Inject return expression (lấy biến nội bộ):
-```
-python core/premierCore/run_jsx.py core/premierCore/getTimeline.jsx --inject "JSON.stringify(timelineEntries)"
-```
-
-Dùng trong mã Python:
-```python
-from core.premierCore.run_jsx import run_jsx_file, run_multiple_jsx
-
-run_jsx_file(r"p:/coddd/autotool/core/premierCore/getTimeline.jsx")
-run_multiple_jsx([
-		r"p:/coddd/autotool/core/premierCore/getTimeline.jsx",
-		r"p:/coddd/autotool/core/premierCore/cutAndPush.jsx",
-])
-```
-
-Lưu ý:
-- Premiere phải mở trước.
-- Nếu lỗi COM: kiểm tra đã cài `comtypes` và quyền truy cập.
-- Muốn trả JSON: kết thúc file JSX bằng `JSON.stringify(obj);` hoặc dùng `--inject`.
-
-------------------------------------------------------------
-QUY TRÌNH LÀM VIỆC GỢI Ý (END-TO-END)
-------------------------------------------------------------
-
-1. Tạo / cập nhật từ khóa trong `data/list_name.txt`.
-2. Thu thập link: `python core/downloadTool/get_link.py` (kết quả: `dl_links.txt`).
-3. Chuẩn bị media thủ công (tải về theo link) vào các thư mục đặt tên khớp với textContent mong muốn (vd: `Amber_Portwood_tiktok`).
-4. Import media: chạy `importResource.jsx` (hoặc qua Python với `run_jsx.py`).
-5. Chọn clip trên track cần xuất -> chạy `getTimeline.jsx` để có `timeline_export.csv`.
-6. (Tùy chọn) Merge / xử lý CSV thành `timeline_export_merged.csv` nếu cần đổi textContent.
-7. Chạy `cutAndPush.jsx` để tạo sequence tự động.
-8. Kiểm tra và tinh chỉnh thủ công trong Premiere.
-
-------------------------------------------------------------
-MẸO / TROUBLESHOOTING
-------------------------------------------------------------
-
-| Vấn đề | Nguyên nhân thường gặp | Cách xử lý |
-|--------|------------------------|------------|
-| Không chạy được JSX từ Python | Premiere chưa mở / sai ProgID COM | Mở Premiere trước, kiểm tra `comtypes` |
-| Không tạo clip nào khi cutAndPush | Không tìm thấy Bin trùng tên | Kiểm tra textContent trong CSV & tên Bin (space -> `_`) |
-| CSV rỗng | Không chọn clip trước khi export timeline | Chọn ít nhất 1 clip trên track muốn lấy |
-| Lỗi codec khi import | File không hỗ trợ / hỏng | Bật whitelist hoặc bỏ file lỗi |
-| Lỗi tiếng Việt đường dẫn | Ký tự Unicode trong path | Dùng ổ đĩa / thư mục không dấu nếu gặp vấn đề |
-
-------------------------------------------------------------
-MỞ RỘNG TƯƠNG LAI (IDEAS)
-------------------------------------------------------------
-- Thêm bridge file-based command queue (đã có ý tưởng) để trigger action mà không chạy full script.
-- Thêm GUI Python hợp nhất (trigger export, cut, import). 
-- Tự động tạo Bin nếu thiếu khi cutAndPush.
-- Thêm tham số số lần scroll YouTube.
-- Logging đẹp (rich) / progress bar.
 
 ------------------------------------------------------------
 LICENSE

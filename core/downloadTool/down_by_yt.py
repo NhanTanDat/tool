@@ -246,7 +246,7 @@ def download_batch(dlg, links_dict, parent_folder, type = "mp4"):
 
         copy_paste(text_links)
         sleep(1)  # Chờ GUI ổn định sau mỗi lần paste
-        num = 11
+        num = 10
         if type == "mp3":
             num = 12
         i = 1

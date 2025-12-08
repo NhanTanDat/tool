@@ -1,111 +1,47 @@
 /**
- * runAll.jsx - One-click runner for Premiere workflow
- * Steps:
- *  1) Export timeline (top-most selected video track) -> data/<projectName>/timeline_export.csv
- *     - getTimeline.jsx vẫn xuất ra data/timeline_export.csv; script này sẽ di chuyển vào data/<projectName>/
- *  2) Merge CSV với text từ data/<projectName>/list_name.txt -> data/<projectName>/timeline_export_merged.csv
- *  3) Import resources from resource_dir subfolders into bins
- *  4) Cut & push clips using merged CSV (via cutAndPush.jsx auto-run)
+ * runAll.jsx (premRunner-style) - Bridge mỏng cho workflow Premiere
  *
- * Reads data/path.txt with structure:
- *   project_slug=3638
- *   data_folder=p:/coddd/autotool/data/3638
- *   project_path=C:/Users/phamp/Downloads/Copied_3638/Copied_3638/3638.prproj
- * You can also call runAll(projectName) to override project_slug and target subfolder under /data.
- * Alternatively, define global RUNALL_PROJECT_NAME before eval to override.
+ * Nhiệm vụ:
+ *  - Đọc data/path.txt (đã được Python ghi trước).
+ *  - Xác định project_slug, data_folder, timeline CSV.
+ *  - Gọi importResource.jsx (import media theo path.txt).
+ *  - Gọi cutAndPush.jsx với:
+ *        RUNALL_TIMELINE_CSV_PATH  = đường dẫn CSV
+ *        RUNALL_SEQUENCE_NAME      = tên sequence target (mặc định "Main")
+ *
+ * LƯU Ý:
+ *  - KHÔNG app.quit() ở đây; việc đóng Premiere để Python xử lý.
+ *  - Python có thể override:
+ *        RUNALL_TIMELINE_CSV_PATH  (CSV khác)
+ *        RUNALL_SEQUENCE_NAME      (sequence khác "Main")
  */
 
-// ===== JSON Polyfill =====
-if (typeof JSON === 'undefined') {
-    var JSON = {};
-}
+// ================== Config ==================
+var DEFAULT_SEQUENCE_NAME = "Main"; // Sequence mặc định muốn tool đẩy clip vào
 
-// if (typeof JSON.stringify !== 'function') {
-//     JSON.stringify = (function () {
-//         function esc(str) {
-//             return (
-//                 '"' +
-//                 String(str)
-//                     .replace(/\\/g, '\\\\')
-//                     .replace(/"/g, '\\"')
-//                     .replace(/\r/g, '\\r')
-//                     .replace(/\n/g, '\\n')
-//                     .replace(/\t/g, '\\t')
-//                     .replace(/\f/g, '\\f')
-//                     .replace(/\b/g, '') +
-//                 '"'
-//             );
-//         }
-
-//         function isArr(v) {
-//             return Object.prototype.toString.call(v) === '[object Array]';
-//         }
-
-//         function stringify(v) {
-//             var t = typeof v;
-//             if (v === null) return 'null';
-//             if (t === 'number' || t === 'boolean') return '' + v;
-//             if (t === 'string') return esc(v);
-//             if (t === 'undefined' || t === 'function') return 'null';
-//             if (isArr(v)) {
-//                 var a = [];
-//                 for (var i = 0; i < v.length; i++) a.push(stringify(v[i]));
-//                 return '[' + a.join(',') + ']';
-//             }
-//             var parts = [];
-//             for (var k in v) if (v.hasOwnProperty(k)) parts.push(esc(k) + ':' + stringify(v[k]));
-//             return '{' + parts.join(',') + '}';
-//         }
-
-//         return function (v) {
-//             return stringify(v);
-//         };
-//     })();
-// }
-
-if (typeof JSON.parse !== 'function') {
-    JSON.parse = function (txt) {
-        return eval('(' + txt + ')');
-    };
-}
-
-// ===== Utils =====
+// ================== Utils ==================
 function log(msg) {
-    try {
-        $.writeln('[runAll] ' + msg);
-    } catch (e) {}
+    try { $.writeln('[runAll] ' + msg); } catch (e) {}
 }
 
 function joinPath(a, b) {
     if (!a || a === '') return b || '';
     if (!b || b === '') return a || '';
-    
     var s = a.charAt(a.length - 1);
-    return s === '/' || s === '\\' ? a + b : a + '/' + b;
+    return (s === '/' || s === '\\') ? (a + b) : (a + '/' + b);
 }
 
-//hàm này trả về path chuẩn định dạng
 function normalizePath(p) {
     if (!p || p === '') return '';
     return p.replace(/\\/g, '/').replace(/\/+/g, '/');
 }
 
 function fileExists(p) {
-    try {
-        var f = new File(p);
-        return f.exists;
-    } catch (e) {
-        return false;
-    }
+    try { return (new File(p)).exists; } catch (e) { return false; }
 }
 
 function folderExists(p) {
-    try {
-        var f = new Folder(p);
-        return f.exists;
-    } catch (e) {
-        return false;
-    }
+    try { return (new Folder(p)).exists; } catch (e) { return false; }
 }
 
 function ensureFolder(p) {
@@ -117,59 +53,6 @@ function ensureFolder(p) {
         return false;
     }
 }
-
-function readJSONFile(path) {
-    try {
-        var file = new File(path);
-        if (!file.exists) {
-            alert("Không tìm thấy file JSON: " + path);
-            return null;
-        }
-
-        file.encoding = "UTF-8";  // đảm bảo đọc đúng encoding
-        if (!file.open("r")) {
-            alert("Không thể mở file: " + path);
-            return null;
-        }
-
-        var content = file.read();
-        file.close();
-
-        // loại bỏ các ký tự điều khiển ẩn (nếu có, do ExtendScript đôi khi bị)
-        content = content.replace(/[\x00-\x1F]+/g, "");
-
-        // parse JSON
-        var data = JSON.parse(content);
-        return data;
-
-    } catch (e) {
-        alert("Lỗi đọc hoặc parse file JSON: " + e.message);
-        return null;
-    }
-}
-
-
-function writeTextFile(path, content) {
-    try {
-        var f = new File(path);
-        f.encoding = "UTF-8";
-        if (!f.open("w")) return false;
-        f.write(content);
-        f.close();
-        return true;
-    } catch (e) {
-        alert("Lỗi ghi file: " + e.message);
-        return false;
-    }
-}
-
-function sanitizeJSON(obj) {
-    var json = JSON.stringify(obj, null, 4);
-    // loại bỏ ký tự điều khiển ASCII 0–31 (trừ \t, \n, \r)
-    json = json.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, "");
-    return json;
-}
-
 
 function readLines(p, enc) {
     enc = enc || 'UTF-8';
@@ -183,32 +66,7 @@ function readLines(p, enc) {
     return arr;
 }
 
-function copyFile(srcPath, destPath) {
-    try {
-        var src = new File(srcPath);
-        if (!src.exists) return false;
-        var dest = new File(destPath);
-        var destFolder = new Folder(dest.parent.fsName);
-        if (!destFolder.exists) destFolder.create();
-        var ok = src.copy(destPath);
-        return ok;
-    } catch (e) {
-        return false;
-    }
-}
-
-function moveFile(srcPath, destPath) {
-    var ok = copyFile(srcPath, destPath);
-    if (ok) {
-        try {
-            var s = new File(srcPath);
-            if (s.exists) s.remove();
-        } catch (e) {}
-    }
-    return ok;
-}
-
-// parse text file with key=value format
+// parse text file với key=value
 function parsePathTxt(path) {
     try {
         var lines = readLines(path);
@@ -225,38 +83,19 @@ function parsePathTxt(path) {
         }
         return cfg;
     } catch (e) {
-        alert("Lỗi đọc file text: " + e.message);
+        log("Lỗi đọc path.txt: " + e.message);
         return {};
     }
 }
 
-// serialize object to key=value format
-function serializePathTxt(cfg) {
-    var lines = [];
-    for (var key in cfg) {
-        if (cfg.hasOwnProperty(key)) {
-            lines.push(key + "=" + cfg[key]);
-        }
-    }
-    return lines.join("\n");
-}
-
-function getThisDir() {
-    try {
-        var f = new File($.fileName);
-        return f.parent;
-    } catch (e) {
-        return null;
-    }
-}
-
+// ================== Resolve ROOT_DIR giống getTimeline/helper ==================
 function getRootDir() {
-    var d = getThisDir();
-    if (!d) return null;
     try {
-        var pc = d.parent;
-        var core = pc ? pc.parent : null;
-        return core ? core : null;
+        var scriptFile = new File($.fileName);      // .../core/premierCore/runAll.jsx
+        var premierCoreDir = scriptFile.parent;     // premierCore
+        var coreDir = premierCoreDir.parent;        // core
+        var rootDir = coreDir.parent;               // project root (autotool)
+        return rootDir;
     } catch (e) {
         return null;
     }
@@ -266,178 +105,26 @@ var ROOT_DIR = (function () {
     var r = getRootDir();
     if (!r) {
         log('Cannot resolve ROOT_DIR');
+        return '';
     }
-    return r ? r.fsName : '';
+    var s = r.fsName;
+    s = normalizePath(s);
+    log('ROOT_DIR = ' + s);
+    return s;
 })();
 
 var DATA_DIR = (function () {
-    var p = joinPath(ROOT_DIR, '/data');
+    var p = joinPath(ROOT_DIR, 'data');
     ensureFolder(p);
+    p = normalizePath(p);
+    log('DATA_DIR = ' + p);
     return p;
 })();
 
-// ===== Step 1: getTimeline export =====
-function runGetTimelineExport(cfg, projectName) {
-    //add DATA_FOLDER vào path.txt, lưu lại, nếu chưa có thì tạo mới key là data_folder
-    if (cfg && typeof cfg === 'object') {
-        cfg['data_folder'] = joinPath(DATA_DIR, projectName);
-        var pathCfg = joinPath(DATA_DIR, 'path.txt');
-        pathCfg = normalizePath(pathCfg);
-        writeTextFile(pathCfg, serializePathTxt(cfg));
-    } else {
-        log('Cảnh báo: cfg không hợp lệ để kiểm tra/thiết lập data_folder trong path.txt');
-    }
-
-    // Run getTimeline.jsx to export timeline to data/timeline_export.csv
-
-    var p = joinPath(joinPath(ROOT_DIR, 'core'), 'premierCore');
-    var script = joinPath(p, 'getTimeline.jsx');
-    script = normalizePath(script);
-    file = new File(script);
-    if (!file.exists) {
-        log('getTimeline.jsx not found: ' + script);
-        return false;
-    }
-    try {
-        $.writeln('[runAll] Running getTimeline.jsx...');
-        $.evalFile(new File(script));
-        return true;
-    } catch (e) {
-        log('Error getTimeline.jsx: ' + e);
-        return false;
-    }
-}
-
-// ===== Step 2: Merge CSV with TXT (using helper.jsx) =====
-// function parseCSVLine(line) {
-//     var res = [],
-//         cur = '',
-//         inQ = false;
-//     for (var i = 0; i < line.length; i++) {
-//         var ch = line.charAt(i);
-//         if (inQ) {
-//             if (ch === '"') {
-//                 if (i + 1 < line.length && line.charAt(i + 1) === '"') {
-//                     cur += '"';
-//                     i++;
-//                 } else {
-//                     inQ = false;
-//                 }
-//             } else cur += ch;
-//         } else {
-//             if (ch === ',') {
-//                 res.push(cur);
-//                 cur = '';
-//             } else if (ch === '"') {
-//                 inQ = true;
-//             } else cur += ch;
-//         }
-//     }
-//     res.push(cur);
-//     return res;
-// }
-
-// function escapeCSV(val) {
-//     if (val === null || typeof val === 'undefined') return '';
-//     var s = String(val);
-//     var needs = /[",\n\r]/.test(s) || /^\s|\s$/.test(s);
-//     return needs ? '"' + s.replace(/"/g, '""') + '"' : s;
-// }
-
-// function readCSV(path) {
-//     var lines = readLines(path, 'UTF-8');
-//     if (!lines.length) return { header: [], rows: [] };
-//     var header = parseCSVLine(lines[0]);
-//     var rows = [];
-//     for (var i = 1; i < lines.length; i++) {
-//         var ln = lines[i];
-//         if (!ln) continue;
-//         var cols = parseCSVLine(ln);
-//         var obj = {};
-//         for (var c = 0; c < header.length; c++) {
-//             obj[header[c]] = c < cols.length ? cols[c] : '';
-//         }
-//         rows.push(obj);
-//     }
-//     return { header: header, rows: rows };
-// }
-
-// function writeCSV(path, header, rows) {
-//     var parts = [header.join(',')];
-//     for (var i = 0; i < rows.length; i++) {
-//         var r = rows[i],
-//             fields = [];
-//         for (var h = 0; h < header.length; h++) {
-//             fields.push(escapeCSV(r[header[h]]));
-//         }
-//         parts.push(fields.join(','));
-//     }
-//     return writeTextFile(path, parts.join('\n'));
-// }
-
-// // Load helper.jsx functions
-// (function() {
-//     try {
-//         var helperPath = joinPath(joinPath(ROOT_DIR, 'core'), 'premierCore');
-//         helperPath = joinPath(helperPath, 'helper.jsx');
-//         if (fileExists(helperPath)) {
-//             $.writeln('[runAll] Loading helper.jsx...');
-//             $.evalFile(new File(helperPath));
-//         } else {
-//             $.writeln('[runAll] Warning: helper.jsx not found at ' + helperPath);
-//         }
-//     } catch (e) {
-//         $.writeln('[runAll] Error loading helper.jsx: ' + e);
-//     }
-// })();
-
-function mergeCsvWithTxt() {
-    try {
-        var helperPath = joinPath(joinPath(ROOT_DIR, 'core'), 'premierCore');
-        helperPath = joinPath(helperPath, 'helper.jsx');
-        helperPath = normalizePath(helperPath);
-        file = new File(helperPath);
-        if (file.exists) {
-            $.writeln('[runAll] Loading helper.jsx...');
-            $.evalFile(file);
-            return true;
-        } else {
-            $.writeln('[runAll] Warning: helper.jsx not found at ' + helperPath);
-            return false;
-        }
-    } catch (e) {
-        $.writeln('[runAll] Error in mergeCsvWithTxt: ' + e);
-        return false;
-    }
-}
-
-// ===== Step 3: Import resources (bins per subfolder) =====
-//chỉ cần chạy eval file imortResource.jsx
-// --- IGNORE ---
-function importMultipleFolders() {
-    var p = joinPath(joinPath(ROOT_DIR, 'core'), 'premierCore');
-    var script = joinPath(p, 'importResource.jsx');
-    script = normalizePath(script);
-    file = new File(script);
-    if (!file.exists) {
-        log('importResource.jsx not found: ' + script);
-        return 0;
-    }
-    try {
-        $.writeln('[runAll] Running importResource.jsx...');
-        $.evalFile(new File(script));
-        // Assume importResource.jsx sets global IMPORTED_FILE_COUNT
-        var count = typeof IMPORTED_FILE_COUNT !== 'undefined' ? IMPORTED_FILE_COUNT : 0;
-        return count;
-    } catch (e) {
-        log('Error importResource.jsx: ' + e);
-        return 0;
-    }
-}
-// --- IGNORE ---
-
 function readPathConfig() {
     var pathTxt = joinPath(DATA_DIR, 'path.txt');
+    pathTxt = normalizePath(pathTxt);
+    log('readPathConfig -> ' + pathTxt);
     if (!fileExists(pathTxt)) {
         log('path.txt not found: ' + pathTxt);
         return null;
@@ -445,91 +132,198 @@ function readPathConfig() {
     return parsePathTxt(pathTxt);
 }
 
-// ===== Orchestrate =====
-function runAll() {
-    var projectPath = '';
-    var projectName = '';
-    var parentPath = '';
-    var cfg = readPathConfig();
-    if (!cfg) return;
-    
-    // Add project_path to config
-    projectPath = cfg['project_path'];
-    
-    projectName = projectPath.split('/').pop();
-    parentPath = projectPath.substr(0, projectPath.length - projectName.length - 1); 
-    projectName = projectName.replace(/\.prproj$/i, '');
-    var projectSlug = (projectName && String(projectName)) || (typeof RUNALL_PROJECT_NAME !== 'undefined' && RUNALL_PROJECT_NAME) || cfg.project_slug;
-    if (!projectSlug || projectSlug === '') {
-        alert('Thiếu projectName/project_slug. Hãy truyền runAll(projectName) hoặc đặt trong data/path.txt');
-        return;
-    }
-    var SUB_DIR = joinPath(DATA_DIR, projectSlug);
-    ensureFolder(SUB_DIR);
+// ================== Resolve CSV path ==================
+function resolveTimelineCsv(cfg) {
+    var projectSlug = cfg.project_slug || '';
+    var dataFolder = cfg.data_folder || '';
 
-    var resourceDir = parentPath + '/resource';
-    if (!folderExists(resourceDir)) {
-        alert('Thư mục resource không tồn tại: ' + resourceDir);
-        return;
+    // Nếu cfg.data_folder đã chỉ rõ subfolder, ưu tiên luôn
+    if (dataFolder && dataFolder !== '') {
+        // nếu là relative path -> relative so với DATA_DIR
+        if (!folderExists(dataFolder)) {
+            dataFolder = normalizePath(joinPath(DATA_DIR, dataFolder));
+        } else {
+            dataFolder = normalizePath(dataFolder);
+        }
+    } else if (projectSlug && projectSlug !== '') {
+        dataFolder = normalizePath(joinPath(DATA_DIR, projectSlug));
+    } else {
+        dataFolder = DATA_DIR;
     }
 
-    // 1) Export timeline
-    if (!runGetTimelineExport(cfg, projectName)) {
-        alert('Xuất timeline thất bại.');
-        return;
-    }
-    // getTimeline.jsx auto-exports to data/timeline_export.csv -> move into project subfolder
-    var mergedCsv = mergeCsvWithTxt();
-    if (!mergedCsv || mergedCsv === '') {
-        alert('Gộp CSV thất bại.');
-        return;
-    }
-    $.writeln('[runAll] Merged CSV -> ' + mergedCsv);
+    var merged = normalizePath(joinPath(dataFolder, 'timeline_export_merged.csv'));
+    if (fileExists(merged)) return merged;
 
-    // 3) Import resources into bins
-    var imported = importMultipleFolders(resourceDir);
-    $.writeln('[runAll] Imported files: ' + imported);
+    var raw = normalizePath(joinPath(dataFolder, 'timeline_export.csv'));
+    if (fileExists(raw)) return raw;
 
-    // 4) Cut & Push: evaluate cutAndPush.jsx (it auto-runs using data/timeline_export_merged.csv)
-    var cpScript = joinPath(joinPath(ROOT_DIR, 'core'), 'premierCore');
-    cpScript = joinPath(cpScript, 'cutAndPush.jsx');
+    // fallback cuối cùng
+    var merged2 = normalizePath(joinPath(DATA_DIR, 'timeline_export_merged.csv'));
+    if (fileExists(merged2)) return merged2;
+
+    var raw2 = normalizePath(joinPath(DATA_DIR, 'timeline_export.csv'));
+    if (fileExists(raw2)) return raw2;
+
+    return '';
+}
+
+// ================== Resolve sequence name ==================
+function resolveSequenceName(cfg) {
+    // 1) Python override global: RUNALL_SEQUENCE_NAME
+    if (typeof RUNALL_SEQUENCE_NAME !== 'undefined' && RUNALL_SEQUENCE_NAME) {
+        return RUNALL_SEQUENCE_NAME;
+    }
+    // 2) path.txt có khai báo sequence_name=mySeq
+    if (cfg && cfg.sequence_name && cfg.sequence_name !== '') {
+        return cfg.sequence_name;
+    }
+    // 3) Mặc định
+    return DEFAULT_SEQUENCE_NAME;
+}
+
+// ================== Đảm bảo mở đúng project ==================
+function ensureProjectOpened(projectPath) {
+    projectPath = normalizePath(projectPath);
+    var projFile = new File(projectPath);
+    if (!projFile.exists) {
+        alert('Project file không tồn tại: ' + projectPath);
+        return false;
+    }
+
+    try {
+        if (app && app.project && app.project.path) {
+            var currentPath = normalizePath(app.project.path);
+            if (currentPath === projectPath) {
+                log('Đã mở đúng project: ' + currentPath);
+                return true;
+            } else {
+                log('Project đang mở khác: ' + currentPath);
+            }
+        }
+    } catch (e) {
+        // ignore
+    }
+
+    // Mở đúng project theo path.txt
+    log('Mở project: ' + projFile.fsName);
+    try {
+        app.openDocument(projFile.fsName);
+        return true;
+    } catch (e2) {
+        alert('Không mở được project: ' + projFile.fsName + '\nError: ' + e2);
+        return false;
+    }
+}
+
+// ================== Gọi importResource.jsx ==================
+function runImportResources() {
+    var p = joinPath(joinPath(ROOT_DIR, 'core'), 'premierCore');
+    var script = joinPath(p, 'importResource.jsx');
+    script = normalizePath(script);
+    var f = new File(script);
+    if (!f.exists) {
+        log('importResource.jsx not found: ' + script);
+        return 0;
+    }
+    try {
+        $.writeln('[runAll] Running importResource.jsx...');
+        $.evalFile(f);
+        var count = (typeof IMPORTED_FILE_COUNT !== 'undefined') ? IMPORTED_FILE_COUNT : 0;
+        log('Imported files: ' + count);
+        return count;
+    } catch (e) {
+        log('Error importResource.jsx: ' + e);
+        return 0;
+    }
+}
+
+// ================== Gọi cutAndPush.jsx ==================
+function runCutAndPush(timelineCsv, sequenceName) {
+    var cpScriptDir = joinPath(joinPath(ROOT_DIR, 'core'), 'premierCore');
+    var cpScript = joinPath(cpScriptDir, 'cutAndPush.jsx');
+    cpScript = normalizePath(cpScript);
     if (!fileExists(cpScript)) {
-        alert('Không tìm thấy cutAndPush.jsx');
+        alert('Không tìm thấy cutAndPush.jsx tại: ' + cpScript);
         return;
     }
     try {
-        // Provide override path for cutAndPush.jsx to use project subfolder merged CSV.
-        RUNALL_TIMELINE_CSV_PATH = mergedCsv;
-        $.writeln('[runAll] Running cutAndPush.jsx with override path: ' + RUNALL_TIMELINE_CSV_PATH);
+        // 1) CSV path: nếu Python đã set RUNALL_TIMELINE_CSV_PATH thì ưu tiên
+        if (typeof RUNALL_TIMELINE_CSV_PATH === 'undefined' || !RUNALL_TIMELINE_CSV_PATH) {
+            RUNALL_TIMELINE_CSV_PATH = timelineCsv;
+        }
+
+        // 2) Sequence name: nếu Python chưa set RUNALL_SEQUENCE_NAME thì set ở đây
+        if (typeof RUNALL_SEQUENCE_NAME === 'undefined' || !RUNALL_SEQUENCE_NAME) {
+            RUNALL_SEQUENCE_NAME = sequenceName || DEFAULT_SEQUENCE_NAME;
+        }
+
+        $.writeln('[runAll] Using sequence name: ' + RUNALL_SEQUENCE_NAME);
+        $.writeln('[runAll] Running cutAndPush.jsx với CSV: ' + RUNALL_TIMELINE_CSV_PATH);
+
         $.evalFile(new File(cpScript));
     } catch (e) {
         alert('Lỗi chạy cutAndPush.jsx: ' + e);
     }
+}
 
+// ================== Main ==================
+function runAll() {
+    var cfg = readPathConfig();
+    if (!cfg) {
+        alert('Không tìm thấy data/path.txt. Hãy để Python ghi path.txt trước khi gọi runAll.jsx.');
+        return;
+    }
 
+    var projectPath = cfg.project_path || '';
+    if (!projectPath || projectPath === '') {
+        alert('Trong path.txt chưa có "project_path".');
+        return;
+    }
+    projectPath = normalizePath(projectPath);
+    log('project_path  = ' + projectPath);
+    log('project_slug  = ' + (cfg.project_slug || ''));
+    log('data_folder   = ' + (cfg.data_folder || ''));
+    log('sequence_name = ' + (cfg.sequence_name || ''));
 
-    
-    // Done, save project
+    // 🔴 Đảm bảo đang làm việc đúng project
+    if (!ensureProjectOpened(projectPath)) {
+        return;
+    }
+
+    // 1) Import resources theo path.txt
+    var imported = runImportResources();
+    $.writeln('[runAll] Imported files: ' + imported);
+
+    // 2) Resolve CSV (nếu Python chưa override RUNALL_TIMELINE_CSV_PATH)
+    var timelineCsv = (typeof RUNALL_TIMELINE_CSV_PATH !== 'undefined' && RUNALL_TIMELINE_CSV_PATH)
+        ? RUNALL_TIMELINE_CSV_PATH
+        : resolveTimelineCsv(cfg);
+
+    if (!timelineCsv) {
+        alert('Không tìm thấy timeline_export_merged.csv hoặc timeline_export.csv.');
+        return;
+    }
+    log('Using timeline CSV: ' + timelineCsv);
+
+    // 3) Resolve sequence name (default "Main") và run cut & push
+    var seqName = resolveSequenceName(cfg);
+    log('Target sequence = ' + seqName);
+    runCutAndPush(timelineCsv, seqName);
+
+    // 4) Save project, KHÔNG app.quit()
     try {
-        app.project.save();
-        $.writeln('[runAll] Project saved.');
+        if (app && app.project) {
+            app.project.save();
+            $.writeln('[runAll] Project saved.');
+        } else {
+            $.writeln('[runAll] app.project không tồn tại, bỏ qua save().');
+        }
     } catch (e) {
         $.writeln('[runAll] Error saving project: ' + e);
     }
 
-    //close premiere
-    try {
-
-        app.quit();
-        $.writeln('[runAll] Premiere closed.');
-    } catch (e) {
-        $.writeln('[runAll] Error closing Premiere: ' + e);
-    }
-
-    $.writeln('[runAll] All done.');
-    return;   
-    
+    $.writeln('[runAll] Done (không đóng Premiere ở đây).');
 }
 
-// Execute
+// Auto-execute
 runAll();

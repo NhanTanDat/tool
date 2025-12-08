@@ -301,9 +301,8 @@ function runHelperSelfTest() {
 }
 
 // To execute the self-test inside ExtendScript, set the flag below to true.
-var RUN_SELF_TEST = true;
-if (RUN_SELF_TEST) runHelperSelfTest();
-
+var RUN_SELF_TEST = false;
+if (RUN_SELF_TEST) runHelperSelfTest()
 // // Example usage (commented):
 // var merged = mergeCsvWithTxt('P:/coddd/autotool/data/timeline_export.csv', 'P:/coddd/autotool/data/3571/list_name.txt', null);
 // // var txt = mergeCsvWithTxtToPlain('P:/coddd/autotool/data/timeline_merged.txt', 'P:/coddd/autotool/data/timeline_export.csv', 'P:/coddd/autotool/data/3571/list_name.txt', true);

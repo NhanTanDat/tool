@@ -1,560 +1,268 @@
-"""YouTube/Google Images link gathering utilities (improved).
-
-Tính năng:
- - Giữ nguyên thứ tự keyword.
- - Logging rõ ràng.
- - Bắt lỗi từng keyword, không dừng toàn bộ.
- - Chuẩn hoá link.
- - Giới hạn số video / keyword (max_per_keyword).
- - Lọc theo thời lượng tối đa (max_minutes) nếu cung cấp.
- - Lọc theo thời lượng tối thiểu (min_minutes) nếu cung cấp.
-
-Luồng chính tách riêng:
- - get_links_main_video: Chỉ thu link video YouTube.
- - get_links_main_image: Chỉ thu link ảnh Google Images.
- - get_links_main: Giữ tương thích cũ, gọi lần lượt 2 luồng trên.
-"""
-
-from selenium import webdriver
-from selenium.webdriver.common.by import By
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-from time import sleep
-from typing import List, Optional
-import re
 import os
-from pywinauto.keyboard import send_keys
+import sys
+from pathlib import Path
+from typing import List, Dict, Any, Optional
+
+# =============================
+#  IMPORT & PATH SETUP
+# =============================
+
+try:
+    from yt_dlp import YoutubeDL
+except ImportError:
+    YoutubeDL = None  # sẽ báo lỗi đẹp nếu thiếu
+
+# Cho phép import cả dạng module lẫn chạy trực tiếp
+THIS_FILE = os.path.abspath(__file__)
+DOWNLOAD_TOOL_DIR = os.path.dirname(THIS_FILE)
+CORE_DIR = os.path.dirname(DOWNLOAD_TOOL_DIR)
+ROOT_DIR = os.path.dirname(CORE_DIR)
+if ROOT_DIR not in sys.path:
+    sys.path.insert(0, ROOT_DIR)
+
+# Dùng lại hàm sinh link ảnh từ downImage.py
+try:
+    from core.downloadTool.downImage import gen_image_links_from_yt_txt
+except Exception:
+    gen_image_links_from_yt_txt = None
 
 
-def init_driver(headless: bool = False):
-    opts = Options()
-    if headless:
-        opts.add_argument('--headless=new')
-    opts.add_argument('--disable-gpu')
-    opts.add_argument('--no-sandbox')
-    opts.add_argument('--disable-dev-shm-usage')
-    opts.add_argument('--lang=en-US')
-    opts.add_argument('--disable-notifications')
-    driver = webdriver.Chrome(options=opts)
-    driver.set_page_load_timeout(60)
-    return driver
+# =============================
+#  HÀM ĐỌC KEYWORD
+# =============================
 
-
-def close_driver(driver):
-    try:
-        driver.quit()
-    except Exception:
-        pass
-
-
-def read_keywords_from_file(file_path) -> List[str]:
-    if not os.path.isfile(file_path):
-        print(f"[get_link] Keywords file not found: {file_path}")
-        return []
-    ordered = []
-    seen = set()
-    with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-        for raw in f:
-            line = raw.strip()
-            if not line:
-                continue
-            # list_name.txt format expected: "<index> <keyword>" -> tách lấy phần sau index nếu phù hợp
-            parts = line.split(maxsplit=1)
-            if len(parts) == 2 and parts[0].isdigit():
-                keyword = parts[1].strip()
-            else:
-                keyword = line
-            if keyword and keyword not in seen:
-                seen.add(keyword)
-                ordered.append(keyword)
-    print(f"[get_link] Loaded {len(ordered)} unique keywords (order preserved).")
-    return ordered
-
-
-def _clean_href(href: str) -> str:
-    if not href:
-        return ''
-    if href.startswith('/watch'):  # relative path case
-        href = 'https://www.youtube.com' + href
-    # remove typical noise params
-    cut_tokens = ['&pp=ygU', '&start_radio=1', '&list=']
-    for token in cut_tokens:
-        if token in href:
-            href = href.split(token)[0]
-    return href
-
-
-def _parse_duration_to_seconds(txt: str) -> Optional[int]:
-    if not txt:
-        return None
-    t = txt.strip().upper()
-    if any(b in t for b in ['LIVE', 'TRỰC TIẾP', 'PREMIERE', 'UPCOMING']):
-        return None
-    parts = t.split(':')
-    if not all(p.isdigit() for p in parts):
-        return None
-    if len(parts) == 2:
-        m, s = parts
-        return int(m)*60 + int(s)
-    if len(parts) == 3:
-        h, m, s = parts
-        return int(h)*3600 + int(m)*60 + int(s)
-    return None
-
-
-def _parse_aria_duration(label: str) -> Optional[int]:
-    """Parse aria-label like '1 hour, 56 minutes, 30 seconds' -> seconds."""
-    if not label:
-        return None
-    text = label.lower()
-    # quick reject for live-like labels
-    if any(k in text for k in ['live', 'premiere', 'upcoming']):
-        return None
-    h = m = s = 0
-    mh = re.search(r'(\d+)\s*hour', text)
-    mm = re.search(r'(\d+)\s*minute', text)
-    ms = re.search(r'(\d+)\s*second', text)
-    if mh:
-        h = int(mh.group(1))
-    if mm:
-        m = int(mm.group(1))
-    if ms:
-        s = int(ms.group(1))
-    total = h*3600 + m*60 + s
-    return total if total > 0 else None
-
-
-def get_dl_link_video(
-    driver,
-    keyword: str,
-    max_results: int,
-    max_minutes: Optional[int] = None,
-    min_minutes: Optional[int] = None,
-    max_scrolls: int = 8,
-) -> List[str]:
-    search_url = f"https://www.youtube.com/results?search_query={keyword}".replace(' ', '+')
-    print(f"[get_link] Navigate: {search_url}")
-    driver.get(search_url)
-    # Wait for video title elements
-    try:
-        WebDriverWait(driver, 20).until(EC.presence_of_element_located((By.ID, 'video-title')))
-    except Exception as e:
-        print(f"[get_link] WARNING: Timeout loading results for '{keyword}': {e}")
-    want = max_results
-    links: List[str] = []
-    max_seconds = max_minutes * 60 if max_minutes else None
-    min_seconds = min_minutes * 60 if min_minutes else None
-
-    processed_ids = set()
-    scroll_count = 0
-    num_scroll = 6
-    # Loop scroll until we have enough links or reach scroll cap
-    while len(links) < want and scroll_count <= max_scrolls:
-        try:
-            elements = driver.find_elements(By.ID, 'video-title')
-        except Exception:
-            elements = []
-        # process newly appeared elements
-        for el in elements:
-            if len(links) >= want:
-                break
-            try:
-                vid_href_raw = el.get_attribute('href')
-                href = _clean_href(vid_href_raw)
-                if not href or href in links:
-                    continue
-                # generate a simple id (video id) to avoid re-processing
-                vid_id = None
-                if 'watch?v=' in href:
-                    vid_id = href.split('watch?v=')[-1].split('&')[0]
-                if vid_id and vid_id in processed_ids:
-                    continue
-                if vid_id:
-                    processed_ids.add(vid_id)
-                dur_seconds = None
-                if max_seconds is not None or min_seconds is not None:
-                    try:
-                        container = el.find_element(By.XPATH, '(./ancestor::ytd-video-renderer | ./ancestor::ytd-rich-item-renderer)[1]')
-                    except Exception:
-                        container = None
-                    if container is not None:
-                        try:
-                            time_nodes = container.find_elements(
-                                By.XPATH,
-                                ".//ytd-thumbnail-overlay-time-status-renderer//*[contains(@class,'badge-shape__text') or contains(@class,'yt-badge-shape__text')]"
-                            )
-                            for tn in time_nodes:
-                                raw = (tn.text or '').strip()
-                                if ':' in raw:
-                                    dur_seconds = _parse_duration_to_seconds(raw)
-                                    if dur_seconds is not None:
-                                        break
-                        except Exception:
-                            pass
-                        if dur_seconds is None:
-                            try:
-                                badge = container.find_element(By.XPATH, ".//ytd-thumbnail-overlay-time-status-renderer//badge-shape[@aria-label]")
-                                aria = badge.get_attribute('aria-label') or ''
-                                dur_seconds = _parse_aria_duration(aria)
-                            except Exception:
-                                pass
-                    if dur_seconds is None:
-                        continue
-                    if max_seconds is not None and dur_seconds > max_seconds:
-                        continue
-                    if min_seconds is not None and dur_seconds < min_seconds:
-                        continue
-                links.append(href)
-            except Exception:
-                continue
-        if len(links) >= want:
-            break
-        # Scroll further
-        scroll_count += 1
-        if(scroll_count > num_scroll):
-            break
-        try:
-            driver.execute_script("window.scrollTo(0, document.documentElement.scrollHeight);")
-        except Exception as e:
-            print(f"[get_link] Scroll exec error (ignored): {e}")
-            break
-        sleep(1.6 if scroll_count < 3 else 2.2)
-    if len(links) < want:
-        print(f"[get_link] Reached scroll limit ({scroll_count}/{max_scrolls}) with only {len(links)}/{want} links.")
-    print(f"[get_link] Keyword '{keyword}' -> {len(links)} links (filtered)")
-    if not links:
-        # fallback 1 link mặc định để tránh rỗng hoàn toàn
-        links.append("https://www.youtube.com/watch?v=WqQUvfsavO4")
-    return links
-
-
-
-def get_dl_link_image(driver, keyword, num_of_image=10):
-    """Lấy danh sách link ảnh từ Google Images với các cải tiến:
-    - Giữ thao tác phím RIGHT như bản gốc (di chuyển qua từng ảnh).
-    - Loại bỏ ảnh có link bảo vệ: data:image/*, encrypted-tbn (thumbnail preview của Google).
-    - Loại bỏ ảnh mờ / quá nhỏ theo kích thước hiển thị (naturalWidth/Height < 50).
-    - Loại bỏ ảnh < 10KB nếu lấy được Content-Length (dùng requests nếu có, fallback bỏ qua kiểm tra này nếu không có).
-    - Tự động scroll nếu chưa thu đủ số ảnh.
+def _read_keywords(keywords_file: str) -> List[str]:
     """
-    try:
-        driver.maximize_window()
-    except Exception:
-        pass
+    Đọc list keyword từ file, loại trùng nhưng giữ nguyên thứ tự.
+    """
+    path = Path(keywords_file)
+    if not path.exists():
+        raise FileNotFoundError(f"keywords_file không tồn tại: {keywords_file}")
 
-    search_url = f"https://www.google.com/search?tbm=isch&q={keyword}".replace(' ', '+')
-    driver.get(search_url)
-    driver.implicitly_wait(10)
-    sleep(2)
-
-    # Focus để điều khiển phím
-    try:
-        #tìm thẻ div có thuộc tính jsdata thứ 11
-        list_div = driver.find_elements(By.XPATH, '//div[@jsdata]')
-        if list_div:
-            list_div = list_div[10]
-            #get value of jsdata
-            jsdata = list_div.get_attribute('jsdata')
-            value2 = jsdata.split(';')[1]
-            #thay link search_url thành
-            search_url = f"https://www.google.com/search?tbm=isch&q={keyword}#vhid={value2}&vssid=mosaic".replace(' ', '+')
-            driver.get(search_url)
-            driver.implicitly_wait(10)
-            sleep(2)
-    except Exception:
-        pass
-    sleep(1)
-
-    # Đưa selection về bên trái như logic cũ
-    send_keys('{LEFT} {LEFT} {LEFT} {LEFT} {LEFT} {LEFT} {LEFT} {LEFT} {LEFT} {LEFT} {LEFT} {LEFT} {LEFT} {LEFT} {LEFT} {LEFT}')
-
-    # Tham số
-    MIN_DIMENSION = 50  # tránh icon nhỏ / blur
-    MIN_FILE_KB = 10
-    MAX_SCROLL_ATTEMPTS = 20
-    collected = []
     seen = set()
-    scroll_attempts = 0
-    right_moves = 0
+    result: List[str] = []
 
-    # Thử import requests để kiểm tra Content-Length
-    try:
-        import requests  # type: ignore
-        _has_requests = True
-    except Exception:
-        _has_requests = False
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        kw = raw.strip()
+        if not kw:
+            continue
+        if kw in seen:
+            continue
+        seen.add(kw)
+        result.append(kw)
 
-    def is_protected(src: str) -> bool:
-        if not src:
-            return True
-        if src.startswith('data:image/') or 'static.' in src or 'resizing.' in src:  # tránh ảnh tĩnh (icon, logo)
-            return True
-        if 'encrypted' in src:  # thumbnail preview
-            return True
-        return False
+    return result
 
-    def file_size_ok(src: str) -> bool:
-        if not _has_requests:
-            return True  # không kiểm tra nếu thiếu thư viện
-        if not src.lower().startswith(('http://', 'https://')):
-            return True
-        try:
-            head = requests.head(src, timeout=5, allow_redirects=True)
-            cl = head.headers.get('Content-Length')
-            if cl and cl.isdigit():
-                return int(cl) >= MIN_FILE_KB * 1024
-        except Exception:
-            return True  # nếu lỗi HEAD thì bỏ qua lọc này
-        return True
 
-    while len(collected) < num_of_image and scroll_attempts <= MAX_SCROLL_ATTEMPTS:
-        try:
-            anchors = driver.find_elements(By.XPATH, '//a[@rel="noopener" and @target="_blank"]')
-        except Exception:
-            anchors = []
-        if not anchors:
-            # nếu không còn anchor, scroll thử
-            scroll_attempts += 1
-            try:
-                driver.execute_script('window.scrollBy(0, document.body.scrollHeight);')
-            except Exception:
-                break
-            sleep(1.2)
+# =============================
+#  SEARCH YOUTUBE
+# =============================
+
+def _search_youtube_for_keyword(keyword: str, max_results: int = 4) -> List[Dict[str, Any]]:
+    """
+    Search YouTube bằng yt_dlp, trả về list candidate:
+    [
+      {
+        "title": ...,
+        "url": ...,
+        "duration": seconds or None,
+        "channel": ...
+      },
+      ...
+    ]
+    """
+    if YoutubeDL is None:
+        raise RuntimeError(
+            "yt_dlp chưa được cài. Hãy cài bằng:\n"
+            "    pip install yt-dlp"
+        )
+
+    query = f"ytsearch{max_results}:{keyword}"
+
+    ydl_opts = {
+        "quiet": True,
+        "skip_download": True,
+        "default_search": "ytsearch",
+        "noplaylist": True,
+        "extract_flat": True,
+    }
+
+    out: List[Dict[str, Any]] = []
+
+    with YoutubeDL(ydl_opts) as ydl:
+        info = ydl.extract_info(query, download=False)
+        entries = info.get("entries", [])
+        for e in entries:
+            url = e.get("url") or e.get("webpage_url")
+            if not url:
+                continue
+            # yt_dlp extract_flat thường trả về id, cần build lại URL
+            if not url.startswith("http"):
+                url = f"https://www.youtube.com/watch?v={url}"
+
+            item = {
+                "title": e.get("title") or "",
+                "url": url,
+                "duration": e.get("duration"),
+                "channel": (e.get("uploader") or e.get("channel")) or "",
+            }
+            out.append(item)
+
+    return out
+
+
+# =============================
+#  GHI FILE LINK VIDEO
+# =============================
+
+def _write_video_links_txt(
+    output_txt: str,
+    keywords: List[str],
+    videos_per_keyword: int,
+) -> int:
+    """
+    Ghi file link video theo format:
+
+    <keyword 1>
+    https://youtube.com/...
+    https://youtube.com/...
+
+    <keyword 2>
+    https://youtube.com/...
+    ...
+
+    Trả về: tổng số link.
+    """
+    total_links = 0
+    lines: List[str] = []
+
+    for kw in keywords:
+        candidates = _search_youtube_for_keyword(kw, max_results=videos_per_keyword)
+        urls = [c["url"] for c in candidates if c.get("url")]
+
+        if not urls:
+            # vẫn ghi header để down_by_yt sau này có thể tạo folder trống cho keyword
+            lines.append(kw)
+            lines.append("")  # dòng trống
             continue
 
-        # Lấy anchor đầu tiên (giống logic gốc) - giả định phím RIGHT sẽ thay đổi "focus" ảnh hiển thị đầu danh sách / vùng hiển thị
-        try:
-            image_element = anchors[1]
-            img_tag = image_element.find_elements(By.TAG_NAME, 'img')[0]
-            img_src = img_tag.get_attribute('src') or ''
-        except Exception:
-            img_src = ''
+        lines.append(kw)
+        for url in urls:
+            lines.append(url)
+            total_links += 1
+        lines.append("")  # dòng trống giữa các group
 
-        accept = True
-        if not img_src:
-            accept = False
-        if accept and is_protected(img_src):
-            accept = False
+    Path(output_txt).parent.mkdir(parents=True, exist_ok=True)
+    Path(output_txt).write_text("\n".join(lines), encoding="utf-8")
 
-        # Kiểm tra dimension
-        if accept:
-            try:
-                w = int(img_tag.get_attribute('naturalWidth') or 0)
-                h = int(img_tag.get_attribute('naturalHeight') or 0)
-            except Exception:
-                w = h = 0
-            if w < MIN_DIMENSION or h < MIN_DIMENSION:
-                accept = False
+    return total_links
 
-        # Kiểm tra kích thước file HEAD (nếu có)
-        if accept and not file_size_ok(img_src):
-            accept = False
 
-        if accept and img_src not in seen:
-            seen.add(img_src)
-            collected.append(img_src)
+# =============================
+#  TỰ SINH LINK ẢNH TỪ LINK VIDEO
+# =============================
 
-        # Di chuyển sang ảnh kế (giữ nguyên thao tác RIGHT như yêu cầu)
-        send_keys('{RIGHT}')
-        right_moves += 1
-        sleep(0.45)
-
-        # Thỉnh thoảng scroll để load thêm (ví dụ mỗi 8 lần di chuyển)
-        if len(collected) < num_of_image and right_moves % 8 == 0:
-            scroll_attempts += 1
-            try:
-                driver.execute_script('window.scrollBy(0, document.body.scrollHeight);')
-            except Exception:
-                break
-            sleep(0.5 if scroll_attempts < 5 else 0.8)
-
-    return collected[:num_of_image]
-
-def get_links_main_video(
-    keywords_file,
-    output_txt,
-    project_name=None,
-    headless=False,
-    max_per_keyword: int = 2,
-    max_minutes: Optional[int] = None,
-    min_minutes: Optional[int] = None,
-):
-    """Thu link video theo từng keyword và ghi ra output_txt.
-
-    Định dạng file:
-    <stt> <keyword>
-    <link 1>
-    <link 2>
-    ...
+def _auto_gen_image_links(video_txt: str, image_txt: Optional[str] = None) -> Optional[str]:
     """
-    print("[get_link] === START get_links_main_video ===")
-    print(f"[get_link] keywords_file = {keywords_file}")
-    print(f"[get_link] output_txt    = {output_txt}")
-    if project_name:
-        print(f"[get_link] project_name  = {project_name}")
+    Từ file link VIDEO, tự động sinh file link ẢNH thumbnail YouTube.
 
-    keywords = read_keywords_from_file(keywords_file)
-    if not keywords:
-        print("[get_link] No keywords found -> abort.")
-        return
+    Nếu thiếu downImage.gen_image_links_from_yt_txt thì chỉ log cảnh báo.
+    """
+    if gen_image_links_from_yt_txt is None:
+        print("[get_link] WARN: Không import được gen_image_links_from_yt_txt, bỏ qua bước tạo link ảnh.")
+        return None
 
-    driver = init_driver(headless=headless)
-    stt = 0
-    num_vd = 0
-    # clear file at start
+    if image_txt is None:
+        base, ext = os.path.splitext(video_txt)
+        image_txt = base + "_image.txt"  # ví dụ: dl_links_image.txt
+
     try:
-        with open(output_txt, 'w', encoding='utf-8') as f:
-            f.write('')
+        total = gen_image_links_from_yt_txt(video_txt, image_txt)
+        print(f"[get_link] Đã sinh {total} link ảnh vào: {image_txt}")
     except Exception as e:
-        print(f"[get_link] ERROR: cannot clear output file: {e}")
-        close_driver(driver)
-        return
+        print(f"[get_link] LỖI khi sinh link ảnh: {e}")
+        return None
 
-    for idx, keyword in enumerate(keywords, start=1):
-        print(f"[get_link] --- ({idx}/{len(keywords)}) '{keyword}' ---")
-        try:
-            video_links = get_dl_link_video(
-                driver,
-                keyword,
-                max_results=max_per_keyword,
-                max_minutes=max_minutes,
-                min_minutes=min_minutes,
-            )
-        except Exception as e:
-            print(f"[get_link] ERROR collecting video links for '{keyword}': {e}")
-            video_links = []
-
-        stt += 1
-        try:
-            with open(output_txt, 'a', encoding='utf-8') as f:
-                f.write(f"{stt} {keyword}\n")
-                for link in video_links:
-                    num_vd += 1
-                    f.write(f"{link}\n")
-        except Exception as e:
-            print(f"[get_link] ERROR writing video links for '{keyword}': {e}")
-        sleep(1.0)
-
-    print(f"[get_link] TOTAL video links written: {num_vd}")
-    close_driver(driver)
-    print("[get_link] === END get_links_main_video ===")
+    return image_txt
 
 
-def get_links_main_image(
-    keywords_file,
-    output_txt,
-    project_name=None,
-    headless=False,
-    images_per_keyword: int = 10,
-):
-    """Thu link ảnh theo từng keyword và ghi ra output_txt.
+# =============================
+#  HÀM MAIN CHO GUI
+# =============================
 
-    Lưu ý: output_txt là đường dẫn file ảnh (vd: dl_links_image.txt). Hàm này chỉ ghi ảnh.
-
-    Định dạng file:
-    <stt> <keyword>
-    <link ảnh 1>
-    <link ảnh 2>
-    ...
+def get_links_main(*args, **kwargs) -> None:
     """
-    print("[get_link] === START get_links_main_image ===")
-    print(f"[get_link] keywords_file = {keywords_file}")
-    print(f"[get_link] output_txt    = {output_txt}")
-    if project_name:
-        print(f"[get_link] project_name  = {project_name}")
+    Hàm main được GUI gọi.
 
-    keywords = read_keywords_from_file(keywords_file)
+    Hỗ trợ cả style cũ (chỉ VIDEO) lẫn mới (VIDEO + ẢNH).
+
+    Expect phổ biến:
+        get_links_main(keywords_file, output_txt, project_name)
+
+    Có thể mở rộng:
+        get_links_main(keywords_file, output_txt, project_name, videos_per_keyword=4)
+    """
+    if len(args) < 3:
+        raise ValueError(
+            "get_links_main yêu cầu ít nhất 3 tham số: "
+            "keywords_file, output_txt, project_name"
+        )
+
+    keywords_file = args[0]
+    output_txt = args[1]
+    project_name = args[2]  # hiện tại chỉ dùng để log
+
+    # Default config
+    videos_per_keyword = kwargs.get("videos_per_keyword", 4)
+
+    # Cho phép truyền videos_per_keyword dạng positional (arg thứ 4)
+    if len(args) >= 4 and isinstance(args[3], int):
+        videos_per_keyword = args[3]
+
+    print("[get_link] === START get_links_main ===")
+    print(f"[get_link] keywords_file        = {keywords_file}")
+    print(f"[get_link] output_txt           = {output_txt}")
+    print(f"[get_link] project_name         = {project_name}")
+    print(f"[get_link] videos_per_keyword   = {videos_per_keyword}")
+
+    keywords = _read_keywords(keywords_file)
+    print(f"[get_link] Loaded {len(keywords)} unique keywords (order preserved).")
     if not keywords:
-        print("[get_link] No keywords found -> abort.")
+        print("[get_link] Không có keyword nào, bỏ qua.")
+        print("[get_link] === END get_links_main (NO KEYWORDS) ===")
         return
 
-    driver = init_driver(headless=headless)
-    stt = 0
-    # clear file at start
-    try:
-        with open(output_txt, 'w', encoding='utf-8') as f:
-            f.write('')
-    except Exception as e:
-        print(f"[get_link] ERROR: cannot clear output file: {e}")
-        close_driver(driver)
-        return
-
-    for idx, keyword in enumerate(keywords, start=1):
-        print(f"[get_link] --- ({idx}/{len(keywords)}) '{keyword}' ---")
-        try:
-            img_count = images_per_keyword if images_per_keyword and images_per_keyword > 0 else 10
-            image_links = get_dl_link_image(driver, keyword, num_of_image=img_count)
-        except Exception as e:
-            print(f"[get_link] ERROR collecting image links for '{keyword}': {e}")
-            image_links = []
-
-        stt += 1
-        try:
-            with open(output_txt, 'a', encoding='utf-8') as f:
-                f.write(f"{stt} {keyword}\n")
-                for link in image_links:
-                    f.write(f"{link}\n")
-        except Exception as e:
-            print(f"[get_link] ERROR writing image links for '{keyword}': {e}")
-        sleep(1.0)
-
-    close_driver(driver)
-    print("[get_link] === END get_links_main_image ===")
-
-def get_links_main(
-    keywords_file,
-    output_txt,
-    project_name=None,
-    headless=False,
-    max_per_keyword: int = 2,
-    max_minutes: Optional[int] = None,
-    min_minutes: Optional[int] = None,
-    images_per_keyword: int = 10,
-):
-    """Giữ tương thích cũ: chạy cả video và ảnh.
-
-    - Video -> ghi vào output_txt.
-    - Ảnh  -> ghi vào output_txt với hậu tố `_image.txt` nếu tên file kết thúc bằng .txt,
-              ngược lại thêm hậu tố `_image`.
-    """
-    print("[get_link] === START get_links_main (compat) ===")
-    # 1) Video
-    get_links_main_video(
-        keywords_file=keywords_file,
+    # Ghi file link VIDEO
+    total_video_links = _write_video_links_txt(
         output_txt=output_txt,
-        project_name=project_name,
-        headless=headless,
-        max_per_keyword=max_per_keyword,
-        max_minutes=max_minutes,
-        min_minutes=min_minutes,
+        keywords=keywords,
+        videos_per_keyword=videos_per_keyword,
     )
+    print(f"[get_link] Đã ghi {total_video_links} link video vào: {output_txt}")
 
-    # 2) Image
-    if isinstance(output_txt, str) and output_txt.lower().endswith('.txt'):
-        img_output = output_txt[:-4] + '_image.txt'
-    else:
-        img_output = output_txt + '_image'
-    get_links_main_image(
-        keywords_file=keywords_file,
-        output_txt=img_output,
-        project_name=project_name,
-        headless=headless,
-        images_per_keyword=images_per_keyword,
-    )
-    print("[get_link] === END get_links_main (compat) ===")
+    # Tự động sinh file link ẢNH từ link video (thumbnail YouTube)
+    _auto_gen_image_links(output_txt)
 
+    print("[get_link] === END get_links_main ===")
+
+
+# =============================
+#  CHO PHÉP CHẠY TỪ COMMAND LINE
+# =============================
 
 if __name__ == "__main__":
-    import os, sys
-    THIS_DIR = os.path.abspath(os.path.dirname(__file__))
-    ROOT_DIR = os.path.abspath(os.path.join(THIS_DIR, '..', '..'))
-    DATA_DIR = os.path.join(ROOT_DIR, 'data')
-    if not os.path.isdir(DATA_DIR):
-        try:
-            os.makedirs(DATA_DIR, exist_ok=True)
-        except Exception:
-            pass
-    keywords_file = os.path.join(DATA_DIR, 'list_name.txt')
-    output_txt = os.path.join(DATA_DIR, 'dl_links.txt')
-    get_links_main(keywords_file, output_txt)
+    # Ví dụ:
+    #   python -m core.downloadTool.get_link data/naruto/list_name.txt data/naruto/dl_links.txt naruto
+    cli_args = sys.argv[1:]
+    if len(cli_args) < 3:
+        print("Usage:")
+        print("  python -m core.downloadTool.get_link "
+              "<keywords_file> <output_txt> <project_name> [videos_per_keyword]")
+        sys.exit(1)
+
+    kf = cli_args[0]
+    out_txt = cli_args[1]
+    proj = cli_args[2]
+    vpk = int(cli_args[3]) if len(cli_args) >= 4 else 4
+
+    get_links_main(kf, out_txt, proj, vpk)

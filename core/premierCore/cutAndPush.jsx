@@ -1,5 +1,4 @@
 // NOTE: ExtendScript không hỗ trợ cú pháp ES6 import; bỏ dòng import và dùng hàm tự định nghĩa.
-// Helper notify giống các file khác (tùy chọn bật alert)
 var ENABLE_ALERTS = false;
 function notify(msg){
     $.writeln('[cutAndPush] ' + msg);
@@ -8,103 +7,103 @@ function notify(msg){
 
 // ===== Helpers for path + I/O =====
 function _joinPath(a, b) {
-	if (!a || a === '') return b || '';
-	if (!b || b === '') return a || '';
-	var s = a.charAt(a.length - 1);
-	return (s === '/' || s === '\\') ? (a + b) : (a + '/' + b);
+    if (!a || a === '') return b || '';
+    if (!b || b === '') return a || '';
+    var s = a.charAt(a.length - 1);
+    return (s === '/' || s === '\\') ? (a + b) : (a + '/' + b);
 }
 
 function _fileExists(p) {
-	try { var f = new File(p); return f.exists; } catch (e) { return false; }
+    try { var f = new File(p); return f.exists; } catch (e) { return false; }
 }
 
 function _folderExists(p) {
-	try { var f = new Folder(p); return f.exists; } catch (e) { return false; }
+    try { var f = new Folder(p); return f.exists; } catch (e) { return false; }
 }
 
 function _ensureFolder(p) {
-	try { var f = new Folder(p); if (!f.exists) return f.create(); return true; } catch (e) { return false; }
+    try { var f = new Folder(p); if (!f.exists) return f.create(); return true; } catch (e) { return false; }
 }
 
 function _readTextFile(p) {
-	try {
-		var f = new File(p);
-		if (!f.exists) return '';
-		if (!f.open('r')) return '';
-		var t = f.read();
-		f.close();
-		return t;
-	} catch (e) { return ''; }
+    try {
+        var f = new File(p);
+        if (!f.exists) return '';
+        if (!f.open('r')) return '';
+        var t = f.read();
+        f.close();
+        return t;
+    } catch (e) { return ''; }
 }
 
 // parse text file with key=value format
 function _parsePathTxt(path) {
-	try {
-		var content = _readTextFile(path);
-		var lines = content.split('\n');
-		var cfg = {};
-		for (var i = 0; i < lines.length; i++) {
-			var line = lines[i].replace(/^\s+|\s+$/g, '');
-			if (line === "" || line.indexOf("=") === -1) continue;
-			var parts = line.split("=");
-			if (parts.length >= 2) {
-				var key = parts[0].replace(/^\s+|\s+$/g, '');
-				var value = parts.slice(1).join("=").replace(/^\s+|\s+$/g, '');
-				cfg[key] = value;
-			}
-		}
-		return cfg;
-	} catch (e) {
-		$.writeln("Lỗi đọc file text: " + e.message);
-		return {};
-	}
+    try {
+        var content = _readTextFile(path);
+        var lines = content.split('\n');
+        var cfg = {};
+        for (var i = 0; i < lines.length; i++) {
+            var line = lines[i].replace(/^\s+|\s+$/g, '');
+            if (line === "" || line.indexOf("=") === -1) continue;
+            var parts = line.split("=");
+            if (parts.length >= 2) {
+                var key = parts[0].replace(/^\s+|\s+$/g, '');
+                var value = parts.slice(1).join("=").replace(/^\s+|\s+$/g, '');
+                cfg[key] = value;
+            }
+        }
+        return cfg;
+    } catch (e) {
+        $.writeln("Lỗi đọc file text: " + e.message);
+        return {};
+    }
 }
 
 // ===== Xác định thư mục data theo path.txt =====
 var DATA_FOLDER = (function () {
-	try {
-		// 1) Tìm root (....../projectRoot)
-		var scriptFile = new File($.fileName);      // .../core/premierCore/cutAndPush.jsx
-		var premierCoreDir = scriptFile.parent;     // premierCore
-		var coreDir = premierCoreDir.parent;        // core
-		var rootDir = coreDir.parent;               // project root
+    try {
+        // 1) Tìm root (....../projectRoot)
+        var scriptFile = new File($.fileName);      // .../core/premierCore/cutAndPush.jsx
+        var premierCoreDir = scriptFile.parent;     // premierCore
+        var coreDir = premierCoreDir.parent;        // core
+        var rootDir = coreDir.parent;               // project root
 
-		// 2) Root data folder (để tìm path.txt): <root>/data
-		var rootDataPath = rootDir.fsName + '/data';
-		_ensureFolder(rootDataPath);
+        // 2) Root data folder (để tìm path.txt): <root>/data
+        var rootDataPath = rootDir.fsName + '/data';
+        _ensureFolder(rootDataPath);
 
-		// 3) Đọc data/path.txt (nếu có) để lấy data_folder hoặc project_slug
-		var pathTxt = _joinPath(rootDataPath, 'path.txt');
-		var targetDataPath = rootDataPath; // fallback mặc định
-		if (_fileExists(pathTxt)) {
-			try {
-				var cfg = _parsePathTxt(pathTxt);
-				// Ưu tiên trường data_folder (có thể là tuyệt đối hoặc tương đối so với root/data)
-				if (cfg && cfg.data_folder) {
-					var df = String(cfg.data_folder);
-					if (_folderExists(df)) {
-						targetDataPath = df;
-					} else {
-						targetDataPath = _joinPath(rootDataPath, df);
-					}
-				} else if (cfg && cfg.project_slug) {
-					targetDataPath = _joinPath(rootDataPath, String(cfg.project_slug));
-				}
-			} catch (eCfg) {
-				$.writeln('[DATA_FOLDER] Lỗi đọc path.txt, dùng fallback root/data. Error: ' + eCfg);
-			}
-		} else {
-			$.writeln('[DATA_FOLDER] Không tìm thấy data/path.txt, dùng fallback root/data');
-		}
+        // 3) Đọc data/path.txt (nếu có) để lấy data_folder hoặc project_slug
+        var pathTxt = _joinPath(rootDataPath, 'path.txt');
+        var targetDataPath = rootDataPath; // fallback mặc định
+        if (_fileExists(pathTxt)) {
+            try {
+                var cfg = _parsePathTxt(pathTxt);
+                // Ưu tiên trường data_folder (có thể là tuyệt đối hoặc tương đối so với root/data)
+                if (cfg && cfg.data_folder) {
+                    var df = String(cfg.data_folder);
+                    if (_folderExists(df)) {
+                        targetDataPath = df;
+                    } else {
+                        targetDataPath = _joinPath(rootDataPath, df);
+                    }
+                } else if (cfg && cfg.project_slug) {
+                    targetDataPath = _joinPath(rootDataPath, String(cfg.project_slug));
+                }
+            } catch (eCfg) {
+                $.writeln('[DATA_FOLDER] Lỗi đọc path.txt, dùng fallback root/data. Error: ' + eCfg);
+            }
+        } else {
+            $.writeln('[DATA_FOLDER] Không tìm thấy data/path.txt, dùng fallback root/data');
+        }
 
-		_ensureFolder(targetDataPath);
-		var folder = new Folder(targetDataPath);
-		$.writeln('[DATA_FOLDER] Using data folder: ' + folder.fsName);
-		return folder.fsName.replace(/\\/g,'/');
-	} catch (e2) {
-		$.writeln('[DATA_FOLDER] Fallback to desktop due to error: ' + e2);
-		return Folder.desktop.fsName.replace(/\\/g,'/');
-	}
+        _ensureFolder(targetDataPath);
+        var folder = new Folder(targetDataPath);
+        $.writeln('[DATA_FOLDER] Using data folder: ' + folder.fsName);
+        return folder.fsName.replace(/\\/g,'/');
+    } catch (e2) {
+        $.writeln('[DATA_FOLDER] Fallback to desktop due to error: ' + e2);
+        return Folder.desktop.fsName.replace(/\\/g,'/');
+    }
 })();
 
 // Helper tạo path chuẩn
@@ -114,47 +113,7 @@ function joinPath(base, name){
     return base + '/' + name;
 }
 
-
-// Parser CSV xuất từ getTimeline (header linh hoạt có hoặc không có timecode)
-function readTimelineCSVFile(filePath){
-    try {
-        var f = new File(filePath);
-        if (!f.exists) return [];
-        if (!f.open('r')) return [];
-        var lines = [];
-        while(!f.eof) lines.push(f.readln());
-        f.close();
-        if (!lines.length) return [];
-        var header = lines[0];
-        var cols = header.split(',');
-        var map = {};
-        for (var i=0;i<cols.length;i++){ map[cols[i]] = i; }
-        // Xác định chỉ số cột
-        var idxStart = map['startSeconds'];
-        var idxEnd = map['endSeconds'];
-        var idxName = map['name'];
-        var idxText = map['textContent'];
-        if (typeof idxStart === 'undefined' || typeof idxEnd === 'undefined') return [];
-        var out = [];
-        for (var r=1;r<lines.length;r++){
-            var line = lines[r];
-            if (!line) continue;
-            var parts = splitCSVLine(line);
-            if (parts.length < cols.length) continue;
-            var s = parseFloat(parts[idxStart]);
-            var e = parseFloat(parts[idxEnd]);
-            if (isNaN(s) || isNaN(e) || s < 0 || e <= s) continue;
-            var nm = idxName!=null ? parts[idxName] : 'Clip';
-            var txt = idxText!=null ? parts[idxText] : '';
-            out.push({ index: out.length, startSeconds: s, endSeconds: e, name: nm, textContent: txt });
-        }
-        if (out.length) $.writeln('[readTimelineCSVFile] Parsed ' + out.length + ' clips from CSV.');
-        return out;
-    } catch(e){
-        $.writeln('[readTimelineCSVFile] Error: ' + e);
-        return [];
-    }
-}
+// ==================== CSV helpers ====================
 
 // Simple CSV splitter respecting quotes
 function splitCSVLine(line){
@@ -177,20 +136,152 @@ function splitCSVLine(line){
     res.push(cur);
     return res;
 }
-//file này chuyên thực hiện việc cắt và đẩy clip vào timeline theo data từ file JSON/CSV, đã có sẵn các bin và file media trong project
-var project;
-var sequence;
-// Lưu lại các khoảng (in,out) đã dùng cho mỗi clip nguồn để tránh cắt trùng nhau quá nhiều
-// Key: clipName + '_' + playableDurationRounded
-// Lưu cấu trúc tránh trùng: dùng thuộc tính 'start' và 'end' thay vì 'in'/'out' để tránh xung đột từ khóa.
-// Backward compatibility: nếu gặp object cũ có 'in'/'out' sẽ được chuyển đổi sang 'start'/'end'.
-var _USED_INTERVALS = {}; // { key: [ {start: Number, end: Number} , ... ] }
+
+// Parser CSV: hỗ trợ cả dạng getTimeline (startSeconds/endSeconds)
+// và dạng AI (scene_index,keyword,duration_sec,search_query,voiceover)
+function readTimelineCSVFile(filePath){
+    try {
+        var f = new File(filePath);
+        if (!f.exists) {
+            $.writeln('[readTimelineCSVFile] File not found: ' + filePath);
+            return [];
+        }
+        if (!f.open('r')) {
+            $.writeln('[readTimelineCSVFile] Cannot open file: ' + filePath);
+            return [];
+        }
+
+        var lines = [];
+        while (!f.eof) {
+            lines.push(f.readln());
+        }
+        f.close();
+        if (!lines.length) return [];
+
+        var headerLine = lines[0];
+        var headerCols = splitCSVLine(headerLine);
+        if (!headerCols || !headerCols.length) {
+            $.writeln('[readTimelineCSVFile] Empty header line.');
+            return [];
+        }
+
+        // map header -> index (normalized lowercase)
+        var colMap = {};
+        for (var i = 0; i < headerCols.length; i++) {
+            var raw = headerCols[i];
+            if (!raw) continue;
+            var norm = raw.replace(/^\s+|\s+$/g, '').toLowerCase();
+            if (!norm) continue;
+            colMap[norm] = i;
+        }
+
+        function findIdx(possibleNames) {
+            for (var k = 0; k < possibleNames.length; k++) {
+                var key = possibleNames[k];
+                if (!key) continue;
+                var normKey = key.toLowerCase();
+                if (typeof colMap[normKey] !== 'undefined') {
+                    return colMap[normKey];
+                }
+            }
+            return -1;
+        }
+
+        // cột thời gian
+        var idxStart = findIdx(['startSeconds','start_seconds','start_sec','start']);
+        var idxEnd   = findIdx(['endSeconds','end_seconds','end_sec','end']);
+        var idxDur   = findIdx(['duration_sec','durationSeconds','duration','duration_s']);
+
+        // cột tên/bin & text
+        var idxName  = findIdx(['name','keyword','bin','bin_name']);
+        var idxText  = findIdx(['textContent','voiceover','text','subtitle']);
+
+        var mode = '';
+        if (idxStart >= 0 && idxEnd >= 0) {
+            mode = 'start_end';      // file có sẵn startSeconds/endSeconds
+        } else if (idxDur >= 0) {
+            mode = 'duration_only';  // chỉ có duration_sec -> tự tính start/end nối tiếp
+        } else {
+            $.writeln('[readTimelineCSVFile] Header không có cột start/end hoặc duration. Header: ' + headerLine);
+            return [];
+        }
+
+        var out = [];
+        var currentStart = 0;
+
+        for (var r = 1; r < lines.length; r++) {
+            var line = lines[r];
+            if (!line) continue;
+            var parts = splitCSVLine(line);
+            if (!parts || !parts.length) continue;
+
+            var s, e, d;
+
+            if (mode === 'start_end') {
+                if (idxStart < 0 || idxEnd < 0 ||
+                    idxStart >= parts.length || idxEnd >= parts.length) {
+                    continue;
+                }
+                s = parseFloat(parts[idxStart]);
+                e = parseFloat(parts[idxEnd]);
+                if (isNaN(s) || isNaN(e) || s < 0 || e <= s) {
+                    continue;
+                }
+            } else { // duration_only
+                if (idxDur < 0 || idxDur >= parts.length) continue;
+                d = parseFloat(parts[idxDur]);
+                if (isNaN(d) || d <= 0) continue;
+                s = currentStart;
+                e = s + d;
+                currentStart = e;
+            }
+
+            var nm = 'Scene_' + (out.length + 1);
+            if (idxName >= 0 && idxName < parts.length) {
+                nm = parts[idxName];
+            }
+
+            var txt = '';
+            if (idxText >= 0 && idxText < parts.length) {
+                txt = parts[idxText];
+            }
+
+            out.push({
+                index: out.length,
+                startSeconds: s,
+                endSeconds: e,
+                name: nm,
+                textContent: txt
+            });
+        }
+
+        if (out.length) {
+            $.writeln('[readTimelineCSVFile] Parsed ' + out.length + ' clips from CSV (mode=' + mode + ').');
+        } else {
+            $.writeln('[readTimelineCSVFile] No valid row parsed from CSV.');
+        }
+        return out;
+    } catch(e){
+        $.writeln('[readTimelineCSVFile] Error: ' + e);
+        return [];
+    }
+}
+
+// Biến global dùng khắp file
+var project = null;
+var sequence = null;
+var g_project = null;
+var g_sequence = null;
+
+// Lưu lại các khoảng (in,out) đã dùng ...
+var _USED_INTERVALS = {};
+
 
 // Cấu hình thuật toán tránh trùng
 var NON_OVERLAP_CONFIG = {
-    maxRandomTries: 12,      // số lần thử random khác trước khi quét gap
+    maxRandomTries: 12,        // số lần thử random khác trước khi quét gap
     minSeparationFactor: 0.35, // yêu cầu đoạn mới không overlap hơn (factor * finalDuration)
-    jitterFraction: 0.15     // khi chọn trong gap có thể dịch một chút
+    jitterFraction: 0.15       // khi chọn trong gap có thể dịch một chút
 };
 
 function _intervalKey(videoItem, srcPlayable){
@@ -244,6 +335,7 @@ function _pickNonOverlappingStart(srcInSec, srcOutSec, finalDuration, key){
     if (maxStart < srcInSec) return srcInSec; // clip ngắn
     var attempts = NON_OVERLAP_CONFIG.maxRandomTries;
     var minAllowedOverlap = NON_OVERLAP_CONFIG.minSeparationFactor * finalDuration;
+
     for (var t=0;t<attempts;t++){
         var cand = srcInSec + Math.random() * (maxStart - srcInSec);
         var candEnd = cand + finalDuration;
@@ -252,6 +344,7 @@ function _pickNonOverlappingStart(srcInSec, srcOutSec, finalDuration, key){
             return cand;
         }
     }
+
     // Nếu random thất bại, thử tìm gap tuyến tính (sort trước)
     if (list.length){
         _upgradeOldIntervals(list);
@@ -286,34 +379,177 @@ function _pickNonOverlappingStart(srcInSec, srcOutSec, finalDuration, key){
     return fallback;
 }
 
-// =================== THAO TÁC THUẦN GIÂY ===================
-// Sử dụng trực tiếp thuộc tính .seconds của time object; bỏ toàn bộ xử lý ticks.
+// =================== Time helpers ===================
+// Premiere trả về Time object có .seconds; ta luôn làm việc bằng giây
 function timeObjToSeconds(t){
-    try { return (t && typeof t.seconds !== 'undefined') ? t.seconds : 0; } catch(e){ return 0; }
+    try {
+        if (!t) return 0;
+        if (typeof t.seconds === 'number') {
+            return t.seconds;
+        }
+        // fallback nếu có ticks (hiếm khi cần)
+        if (typeof t.ticks === 'number') {
+            var TICKS_PER_SECOND = 254016000000.0;
+            return t.ticks / TICKS_PER_SECOND;
+        }
+    } catch(e){}
+    return 0;
 }
 
 
-//hàm initialize Premiere Pro project và sequence
+// ======= CONFIG =======
+var DEFAULT_SEQUENCE_NAME = "Main";
+
+// Cho phép runAll.jsx override tên sequence
+// (trong runAll.jsx: RUNALL_SEQUENCE_NAME = "Main"; trước khi eval cutAndPush.jsx)
+var TARGET_SEQUENCE_NAME = (typeof RUNALL_SEQUENCE_NAME !== 'undefined' && RUNALL_SEQUENCE_NAME)
+    ? RUNALL_SEQUENCE_NAME
+    : DEFAULT_SEQUENCE_NAME;
+
+// ======= TÌM SEQUENCE THEO TÊN =======
+function _findSequenceItemByName(rootItem, name) {
+    if (!rootItem || !rootItem.children || !rootItem.children.numItems) return null;
+    for (var i = 0; i < rootItem.children.numItems; i++) {
+        var child = rootItem.children[i];
+        if (!child) continue;
+
+        // type 3 = sequence
+        if (child.type === 3 && child.name === name) {
+            return child;
+        }
+        var sub = _findSequenceItemByName(child, name);
+        if (sub) return sub;
+    }
+    return null;
+}
+
+// Lấy sequence đầu tiên tìm thấy (fallback nếu không có tên cụ thể)
+function _findFirstSequenceItem(rootItem) {
+    if (!rootItem || !rootItem.children || !rootItem.children.numItems) return null;
+    for (var i = 0; i < rootItem.children.numItems; i++) {
+        var child = rootItem.children[i];
+        if (!child) continue;
+        if (child.type === 3) return child;
+        var sub = _findFirstSequenceItem(child);
+        if (sub) return sub;
+    }
+    return null;
+}
+
 function initializeProjectAndSequence() {
     if (typeof app === 'undefined' || !app.project) {
-        alert('Script phải chạy bên trong Adobe Premiere Pro.');
-
+        $.writeln('[initializeProjectAndSequence] Không có app.project');
+        return false;
     }
+
+    // Dùng biến GLOBAL
     project = app.project;
-    if (!project) {
-        alert('Không thể truy cập project hiện tại.');
+    g_project = project;
 
+    try {
+        $.writeln('[initializeProjectAndSequence] Project: ' + project.name + ' | path=' + project.path);
+    } catch (e0) {}
+
+    var targetName = (typeof RUNALL_SEQUENCE_NAME !== 'undefined' && RUNALL_SEQUENCE_NAME)
+        ? RUNALL_SEQUENCE_NAME
+        : DEFAULT_SEQUENCE_NAME;
+
+    $.writeln('[initializeProjectAndSequence] Target sequence name = ' + targetName);
+
+    var seq = null;
+    var seqs = project.sequences;
+    var n = seqs ? seqs.numSequences : 0;
+
+    // 1) Nếu activeSequence trùng tên target → dùng luôn
+    if (project.activeSequence) {
+        var active = project.activeSequence;
+        $.writeln('[initializeProjectAndSequence] Active sequence hiện tại: ' + active.name);
+        if (!targetName || active.name === targetName) {
+            seq = active;
+        }
     }
-    sequence = project.activeSequence;
-    if (!sequence) {
-        alert('Không có sequence nào đang mở.');
 
+    // 2) Nếu chưa có, tìm sequence theo tên (vd "Main")
+    if (!seq && targetName) {
+        var seqItem = _findSequenceItemByName(project.rootItem, targetName);
+        if (seqItem) {
+            $.writeln('[initializeProjectAndSequence] Tìm thấy sequence tên "' + targetName + '", openInTimeline.');
+            try {
+                seqItem.openInTimeline();
+                seq = project.activeSequence;
+            } catch (e1) {
+                $.writeln('[initializeProjectAndSequence] Lỗi openInTimeline: ' + e1);
+            }
+        } else {
+            $.writeln('[initializeProjectAndSequence] Không tìm thấy sequence "' + targetName + '" trong project.');
+        }
     }
-    $.writeln('[initializeProjectAndSequence] Project and active sequence initialized.');
 
+    // 3) Fallback: sequence đầu tiên trong project
+    if (!seq && n > 0) {
+        var firstSeq = seqs[0];
+        $.writeln('[initializeProjectAndSequence] Fallback dùng sequence đầu tiên: ' + firstSeq.name);
+        try {
+            firstSeq.openInTimeline();
+            seq = project.activeSequence;
+        } catch (e2) {
+            $.writeln('[initializeProjectAndSequence] Lỗi openInTimeline fallback: ' + e2);
+        }
+    }
+
+    // 4) Nếu vẫn chưa có, thử tạo mới từ clip đầu tiên (giữ nguyên logic cũ)
+    if (!seq) {
+        $.writeln('[initializeProjectAndSequence] Không có sequence nào, thử tạo sequence mới từ clip đầu tiên.');
+
+        var root = project.rootItem;
+        var firstClipItem = null;
+
+        function _findFirstClip(item) {
+            if (!item || !item.children || !item.children.numItems) return null;
+            for (var i = 0; i < item.children.numItems; i++) {
+                var child = item.children[i];
+                if (child && child.type === 1) return child; // clip
+                var sub = _findFirstClip(child);
+                if (sub) return sub;
+            }
+            return null;
+        }
+
+        firstClipItem = _findFirstClip(root);
+
+        if (!firstClipItem) {
+            $.writeln('[initializeProjectAndSequence] Không tìm thấy clip nào trong project, không thể tạo sequence.');
+            return false;
+        }
+
+        var newSeqName = targetName || 'AutoSequence';
+        try {
+            project.newSequenceFromClip(newSeqName, firstClipItem);
+            seq = project.activeSequence;
+            $.writeln('[initializeProjectAndSequence] Đã tạo sequence mới: ' + newSeqName);
+        } catch (e3) {
+            $.writeln('[initializeProjectAndSequence] Lỗi tạo sequence mới: ' + e3);
+            return false;
+        }
+    }
+
+    if (!seq) {
+        $.writeln('[initializeProjectAndSequence] Không thể khởi tạo sequence.');
+        return false;
+    }
+
+    // GÁN VÀO GLOBAL
+    sequence   = seq;
+    g_sequence = seq;
+    app.project.activeSequence = seq;
+
+    $.writeln('[initializeProjectAndSequence] Using sequence: ' + seq.name);
+    return true;
 }
 
-//hàm gen thời gian duration ngẫu nhiên trong khoảng min và max (đơn vị giây)
+
+
+// hàm gen thời gian duration ngẫu nhiên trong khoảng min và max (đơn vị giây)
 function getRandomDuration(minSeconds, maxSeconds) {
     if (minSeconds < 0 || maxSeconds < 0 || minSeconds >= maxSeconds) {
         $.writeln('[getRandomDuration] Invalid min or max seconds');
@@ -323,7 +559,7 @@ function getRandomDuration(minSeconds, maxSeconds) {
     return randomSeconds;
 }
 
-//hàm tự tạo v track mới trên cùng
+// hàm tự tạo v track mới trên cùng (tạm chưa dùng, nhưng giữ lại)
 function addVideoTrackOnTop() {
     var seq = app.project.activeSequence;
     if (!seq) {
@@ -363,10 +599,8 @@ function addVideoTrackOnTop() {
     }
 }
 
-
-
-
-//hàm thực hiện lấy 1 video item từ project theo tên bin, chọn ngẫu nhiên 1 video trong bin đó, sau đó thực hiện cắt và đẩy vào timeline trong v track được chọn
+// hàm thực hiện lấy 1 video item từ project theo tên bin, chọn ngẫu nhiên 1 video trong bin đó,
+// sau đó thực hiện cắt và đẩy vào timeline trong v track được chọn
 function cutAndPushClipToTimeline(binName, idxBinVd, startTime, endTime, sequence, targetVideoTrack) {
     if (!project || !sequence || !targetVideoTrack) {
         $.writeln('[cutAndPushClipToTimeline] project, sequence, or targetVideoTrack is null or undefined');
@@ -392,7 +626,7 @@ function cutAndPushClipToTimeline(binName, idxBinVd, startTime, endTime, sequenc
         return startTime;
     }
 
-    //lấy ra video thứ idxBinVd trong bin
+    // lấy ra video thứ idxBinVd trong bin
     if (idxBinVd < 0 || idxBinVd >= targetBin.children.numItems) {
         $.writeln('[cutAndPushClipToTimeline] idxBinVd out of range: ' + idxBinVd);
         return startTime;
@@ -417,7 +651,7 @@ function cutAndPushClipToTimeline(binName, idxBinVd, startTime, endTime, sequenc
     if (inputDuration <= randomDuration) finalDuration = inputDuration; // đoạn quá ngắn, lấy hết
     else finalDuration = randomDuration; // giữ phần lớn thời gian, trừ 1 đoạn ngẫu nhiên
 
-    // Lấy thời gian in/out gốc của clip nguồn (giây) trực tiếp
+    // Lấy thời gian in/out gốc của clip nguồn (giây)
     var srcInSec = timeObjToSeconds(videoItem.getInPoint());
     var srcOutSec = timeObjToSeconds(videoItem.getOutPoint());
     var srcPlayable = srcOutSec - srcInSec;
@@ -425,26 +659,27 @@ function cutAndPushClipToTimeline(binName, idxBinVd, startTime, endTime, sequenc
         $.writeln('[cutAndPushClipToTimeline] Source clip has non-positive duration');
         return startTime;
     }
+
     // Phạm vi còn lại để chọn vị trí bắt đầu ngẫu nhiên bên trong clip nguồn
     var key = _intervalKey(videoItem, srcPlayable);
     var newInSec = _pickNonOverlappingStart(srcInSec, srcOutSec, finalDuration, key);
     var newOutSec = newInSec + finalDuration;
     if (newOutSec > srcOutSec) newOutSec = srcOutSec; // đảm bảo không vượt quá
 
-    // Gọi createSubClip với giá trị giây (Premiere sẽ tự nội suy nếu hỗ trợ; nếu version yêu cầu ticks thì cần phục hồi logic cũ)
+    // Gọi createSubClip với ĐƠN VỊ GIÂY (seconds) – CHUẨN Premiere
     var newClip = null;
     try {
         newClip = videoItem.createSubClip(
             videoItem.name + '_subclip_' + startTime.toFixed(3) + '_' + endTime.toFixed(3),
             newInSec,
             newOutSec,
-            0,
-            true,
-            0
+            0,   // hasHardBoundaries
+            1,   // takeVideo
+            1    // takeAudio (nếu không muốn audio thì để 0)
         );
     } catch(eCreate) {
-        $.writeln('[cutAndPushClipToTimeline] createSubClip failed with seconds: ' + eCreate);
-        return startTime; // không fallback ticks theo yêu cầu bỏ hẳn ticks
+        $.writeln('[cutAndPushClipToTimeline] createSubClip failed (seconds): ' + eCreate);
+        return startTime;
     }
 
     if (!newClip) {
@@ -453,13 +688,11 @@ function cutAndPushClipToTimeline(binName, idxBinVd, startTime, endTime, sequenc
     }
     $.writeln('[cutAndPushClipToTimeline] Created subclip: ' + newClip.name + ' from ' + newInSec.toFixed(3) + 's to ' + newOutSec.toFixed(3) + 's (duration: ' + finalDuration.toFixed(3) + 's) key=' + key);
 
-    // Đẩy đoạn clip mới vào timeline tại vị trí startTime (giây)
+    // Đẩy đoạn clip mới vào timeline tại vị trí startTime (seconds)
     try {
-        var videoIndex = sequence.videoTracks.numTracks - 1; // track video cao nhất
-        var audioIndex = sequence.audioTracks.numTracks - 1; // track audio cao nhất
-        targetVideoTrack.insertClip(newClip, startTime, videoIndex, audioIndex);
+        targetVideoTrack.insertClip(newClip, startTime);
     } catch(insErr) {
-        $.writeln('[cutAndPushClipToTimeline] insertClip failed (seconds) -> ' + insErr);
+        $.writeln('[cutAndPushClipToTimeline] insertClip failed -> ' + insErr);
     }
 
     $.writeln('[cutAndPushClipToTimeline] Inserted subclip into timeline at ' + startTime + ' seconds on track.');
@@ -467,11 +700,10 @@ function cutAndPushClipToTimeline(binName, idxBinVd, startTime, endTime, sequenc
     return startTime + finalDuration; // Trả về thời gian kết thúc của clip vừa chèn, để lần sau chèn tiếp từ đó
 }
 
-
-//hàm test cut và push clip vào timeline
+// hàm test cut và push clip vào timeline (dev)
 function testCutAndPush() {
     initializeProjectAndSequence();
-    if(!project || !sequence) return;
+    if (!project || !sequence) return -1;
 
     var topIndex = sequence.videoTracks.numTracks - 1;
     if (topIndex < 0) { $.writeln('[testCutAndPush] No video track available'); return; }
@@ -492,62 +724,76 @@ function testCutAndPush() {
     $.writeln('[testCutAndPush] Finished cutting and pushing clips to timeline.');
 }
 
-// Uncomment the line below to run the test function directly
-// testCutAndPush();
+// ================== DEBUG: dump clips trong sequence ==================
+function dumpSequenceClips() {
+    if (!sequence) {
+        $.writeln('[dumpSequenceClips] No sequence');
+        return;
+    }
+    $.writeln('===== DUMP CLIPS OF SEQUENCE: ' + sequence.name + ' =====');
+    var vt = sequence.videoTracks;
+    for (var t = 0; t < vt.numTracks; t++) {
+        var tr = vt[t];
+        if (!tr) continue;
+        var clips = tr.clips;
+        $.writeln('Track V' + t + ' (' + tr.name + '): ' + clips.numItems + ' clips');
+        for (var c = 0; c < clips.numItems; c++) {
+            var item = clips[c];
+            try {
+                $.writeln(
+                    '  [' + c + '] ' + item.name +
+                    ' | start=' + item.start.seconds +
+                    ' | end=' + item.end.seconds
+                );
+            } catch (e) {
+                $.writeln('  [' + c + '] (error reading clip info) ' + e);
+            }
+        }
+    }
+    $.writeln('===== END DUMP =====');
+}
 
+// hàm chính: đọc timeline CSV và chèn lần lượt các đoạn vào track video trên cùng
 function cutAndPushAllTimeline(tlFilePath) { 
-    // Nếu không truyền vào, dùng file mặc định timeline_merged.txt trong DATA_FOLDER
+    // Nếu không truyền vào, dùng file mặc định trong DATA_FOLDER
     if (!tlFilePath || tlFilePath === '') {
-        // Ưu tiên plaintext merge; nếu chưa có sẽ thử JSON rồi CSV sau.
-        var defaultPath = joinPath(DATA_FOLDER, 'timeline_merged.txt');
+        var defaultPath = joinPath(DATA_FOLDER, 'timeline_export_merged.csv');
         tlFilePath = new File(defaultPath);
-        $.writeln('[cutAndPushAllTimeline] Default primary path: ' + defaultPath);
+        $.writeln('[cutAndPushAllTimeline] Default CSV path: ' + defaultPath);
     } else if (typeof tlFilePath === 'string') {
-        // Nếu truyền string, convert thành File object
         tlFilePath = new File(tlFilePath);
     }
-    // Đảm bảo tlFilePath là File object
+
     if (!(tlFilePath instanceof File)) {
         notify('tlFilePath phải là đường dẫn file hoặc File object');
         return -1;
     }
+
     initializeProjectAndSequence();
     if(!project || !sequence) return -1;
 
-    // var topIndex = sequence.videoTracks.numTracks - 1;
-    // //nếu toplayer không trống, tạo track mới
-    // if (topIndex >= 0) {
-    //     var topTrack = sequence.videoTracks[topIndex];
-    //     if (topTrack.clips && topTrack.clips.numItems > 0) {
-    //         $.writeln('[cutAndPushAllTimeline] Top video track is not empty, adding a new track.');
-    //         topTrack = addVideoTrackAtTop(sequence);
-    //         if (!topTrack) {
-    //             notify('Không thể tạo track video mới trên cùng.');
-    //             return -1;
-    //         }
-    //     }
-    // }
     var targetVideoTrack = sequence.videoTracks[sequence.videoTracks.numTracks - 1];
     if (!targetVideoTrack) {
         notify('Không thể lấy track video trên cùng.');
         return -1;
     }
 
-    // đọc file timeline (plain text)
     var tlEntries = [];
-    //nếu file là csv thì dùng hàm đọc csv, không dùng endWith, match để tránh lỗi
     if (tlFilePath.fsName.match(/\.csv$/)) {
-        tlEntries = readTimelineCSVFile(tlFilePath);
+        tlEntries = readTimelineCSVFile(tlFilePath.fsName);
     } else {
-        return notify('Chỉ hỗ trợ file CSV hiện tại: ' + tlFilePath.fsName), -1;
+        notify('Chỉ hỗ trợ file CSV hiện tại: ' + tlFilePath.fsName);
+        return -1;
     }
-    if (!tlEntries.length) { notify('Không có entry hợp lệ trong file: ' + tlFilePath.fsName); return -1; }
+    if (!tlEntries.length) { 
+        notify('Không có entry hợp lệ trong file: ' + tlFilePath.fsName); 
+        return -1; 
+    }
 
     $.writeln('[cutAndPushAllTimeline] Read ' + tlEntries.length + ' entries from timeline file.');
     var processedCount = 0;
     var sizeBin = {}; // cache bin sizes
-    // Map quản lý pool index cho từng bin: { binName: [idx... (đã shuffle)] }
-    var binIdxMap = {};
+    var binIdxMap = {}; // Map quản lý pool index cho từng bin: { binName: [idx... (đã shuffle)] }
 
     function shuffleInPlace(arr){
         for (var i = arr.length - 1; i > 0; i--){
@@ -568,74 +814,130 @@ function cutAndPushAllTimeline(tlFilePath) {
 
     function popIdxFromBin(binName, binSize){
         ensureBinPool(binName, binSize);
-        // pop 1 phần tử cuối cùng
         return binIdxMap[binName].pop();
+    }
+
+    // Tìm bin theo tên, nhưng có hỗ trợ alias kiểu "1_naruto" -> "naruto"
+    function _findBinByNameOrAlias(binName){
+        if (!project || !project.rootItem) return null;
+        var rootItem = project.rootItem;
+        if (!binName) return null;
+
+        var i, child;
+
+        // 1) match chính xác
+        for (i = 0; i < rootItem.children.numItems; i++) {
+            child = rootItem.children[i];
+            if (child && child.type === 2 && child.name === binName) {
+                return child;
+            }
+        }
+
+        var lowerName = String(binName).toLowerCase();
+        var parts = binName.split('_');
+        var lastToken = parts[parts.length - 1];
+        var lastLower = lastToken.toLowerCase();
+
+        // 2) match theo token cuối (vd: "1_naruto" -> "naruto")
+        for (i = 0; i < rootItem.children.numItems; i++) {
+            child = rootItem.children[i];
+            if (child && child.type === 2) {
+                var cnLower = String(child.name).toLowerCase();
+                if (cnLower === lastLower) {
+                    return child;
+                }
+            }
+        }
+
+        // 3) match kiểu chứa nhau (substring)
+        for (i = 0; i < rootItem.children.numItems; i++) {
+            child = rootItem.children[i];
+            if (child && child.type === 2) {
+                var cnLower2 = String(child.name).toLowerCase();
+                if (lowerName.indexOf(cnLower2) >= 0 || cnLower2.indexOf(lowerName) >= 0) {
+                    return child;
+                }
+            }
+        }
+
+        return null;
     }
 
     for (var i = 0; i < tlEntries.length; i++) {
         var entry = tlEntries[i];
         var startSeconds = entry.startSeconds;
         var endSeconds = entry.endSeconds;
+
+        var nameField = entry.name || '';
         var textContent = entry.textContent || '';
-        //đổi ten bin theo textContent thay " " thành "_"
-        var binName = textContent ? textContent.replace(/\s+/g, '_') : '';
+
+        // Ưu tiên binName từ name (keyword/bin), nếu không có thì mới fallback sang textContent
+        var binName = '';
+        if (entry.binName) {
+            binName = String(entry.binName);
+        } else if (nameField) {
+            binName = String(nameField);
+        } else if (textContent) {
+            binName = String(textContent);
+        }
+        binName = binName ? binName.replace(/\s+/g, '_') : '';
+
         if (!binName) {
-            $.writeln('[cutAndPushAllTimeline] Skipping entry with empty bin name at line ' + (i+1));
+            $.writeln('[cutAndPushAllTimeline] Skipping entry với empty bin name tại line ' + (i+1));
             continue;
         }
-        //lấy size bin, đặt thành các giá trị key: binName - value: size integer
+
         var binSize = 0;
         if (sizeBin.hasOwnProperty(binName)) {
             binSize = sizeBin[binName];
         } else {
-            //lấy size bin từ project
-            var rootItem = project.rootItem;
-            if (!rootItem) {
-                $.writeln('[cutAndPushAllTimeline] project.rootItem is null or undefined');
-                continue;
-            }
-            var targetBin = null;
-            for (var j = 0; j < rootItem.children.numItems; j++) {
-                var child = rootItem.children[j];
-                if (child && child.type === 2 && child.name === binName) { // 2 = Bin
-                    targetBin = child;
-                    break;
-                }
-            }
+            var targetBin = _findBinByNameOrAlias(binName);
             if (!targetBin) {
                 $.writeln('[cutAndPushAllTimeline] Bin not found: ' + binName + ' at line ' + (i+1));
                 continue;
             }
             binSize = targetBin.children.numItems;
             if (binSize <= 0) {
-                $.writeln('[cutAndPushAllTimeline] Bin is empty: ' + binName + ' at line ' + (i+1));
+                $.writeln('[cutAndPushAllTimeline] Bin is empty: ' + targetBin.name + ' at line ' + (i+1));
                 continue;
             }
-            sizeBin[binName] = binSize; // lưu lại size bin
+            sizeBin[targetBin.name] = binSize;
+            binName = targetBin.name;
         }
-        // Lựa chọn idx theo pool đã shuffle/popup cho từng binName
+
         while (true){
             var idxInBin = popIdxFromBin(binName, binSize);
             var prevStart = startSeconds;
             startSeconds = cutAndPushClipToTimeline(binName, idxInBin, startSeconds, endSeconds, sequence, targetVideoTrack);
-            if (startSeconds === null || startSeconds === prevStart) { // không tiến lên -> dừng tránh vòng lặp vô hạn
+            if (startSeconds === null || startSeconds === prevStart) {
                 $.writeln('[cutAndPushAllTimeline] Stop loop for entry at line ' + (i+1) + ' (no progress)');
                 break;
             }
             if (startSeconds >= endSeconds) {
                 $.writeln('[cutAndPushAllTimeline] Finished entry at line ' + (i+1));
-                break; // hoàn thành mục này
+                break;
             }
-            // Khi pool rỗng, lần gọi popIdxFromBin tiếp theo sẽ tự tái tạo pool với shuffle ngẫu nhiên
         }
         processedCount++;
     }
+
+    // Debug: dump toàn bộ clips sau khi chèn
+    dumpSequenceClips();
+
     notify('Hoàn thành chèn ' + processedCount + ' mục vào timeline từ file: ' + tlFilePath.fsName);
     return processedCount;
 }
 
-//test
-
 // Allow override from runAll.jsx: when RUNALL_TIMELINE_CSV_PATH is defined, prefer that.
-var csvDef = joinPath(DATA_FOLDER, 'timeline_export_merged.csv');
+var csvDef;
+
+if (typeof RUNALL_TIMELINE_CSV_PATH !== 'undefined' && RUNALL_TIMELINE_CSV_PATH) {
+    // runAll.jsx truyền đường dẫn cụ thể
+    csvDef = RUNALL_TIMELINE_CSV_PATH;
+} else {
+    // fallback: dùng data_folder/timeline_export_merged.csv (AI đã sinh)
+    csvDef = joinPath(DATA_FOLDER, 'timeline_export_merged.csv');
+}
+
 cutAndPushAllTimeline(csvDef);
+

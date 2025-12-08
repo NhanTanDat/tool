@@ -1,4 +1,4 @@
-project_slug=3571
-data_folder=p:/coddd/autotool/data/3571
-project_path=C:/Copied_3571/3571.prproj
-resource_dir=C:/Copied_3571/resource
+project_slug=naruto
+data_folder=C:/Users/Tam/Desktop/aThanh/autotool/data/naruto
+project_path=C:/Users/Tam/Documents/Adobe/Premiere Pro/22.0/naruto/naruto.prproj
+resource_dir=C:/Users/Tam/Documents/Adobe/Premiere Pro/22.0/naruto/resource

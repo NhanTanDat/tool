@@ -1,53 +1,246 @@
 import os
-import sys
-import time
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 import json
 
-# ---------------------------------------------------------------------------
-# Ensure project root (where 'core' lives) is on sys.path
-# ---------------------------------------------------------------------------
-_THIS_DIR = os.path.abspath(os.path.dirname(__file__))
-_ROOT_DIR = os.path.abspath(os.path.join(_THIS_DIR, '..'))  # project root
-DATA_DIR = os.path.join(_ROOT_DIR, 'data')
-if not os.path.isdir(DATA_DIR):
-    try:
-        os.makedirs(DATA_DIR, exist_ok=True)
-    except Exception:
-        pass
-if _ROOT_DIR not in sys.path:
-    sys.path.insert(0, _ROOT_DIR)
+from autotool_logic import (
+    DATA_DIR,
+    CONFIG_PATH,
+    AutoToolLogic,
+    derive_project_slug,
+    compute_links_stats,
+)
 
-# Path to persisted config file
-CONFIG_PATH = os.path.join(DATA_DIR, 'config.json')
+# =====================================================================
+# CONSTANTS: THEME 2025
+# =====================================================================
 
-# NOTE: Heavy modules (pywinauto / selenium / yt-dlp helpers) are now lazily imported
-# to avoid UI lag when opening simple dialogs like Browse. They will be imported only
-# when Run Automation is pressed.
+DARK_BG = "#121212"
+DARK_BG_ELEVATED = "#1E1E1E"
+DARK_BG_CARD = "#252525"
+DARK_BORDER = "#333333"
+TEXT_PRIMARY = "#F5F5F5"
+TEXT_SECONDARY = "#B0B0B0"
+ACCENT = "#00B894"      # teal / green
+ACCENT_SOFT = "#145A5A"
 
-# ---------------------------------------------------------------------------
-# Helper: import create_folder (single definitive path). Provide fallback if import fails.
-# ---------------------------------------------------------------------------
-try:
-    from core.downloadTool.folder_handle import create_folder  # type: ignore
-except Exception:  # fallback simple implementation
-    def create_folder(parent: str, name: str):
-        os.makedirs(os.path.join(parent, name), exist_ok=True)
 
-# ---------------------------------------------------------------------------
-# Main GUI Class
-# ---------------------------------------------------------------------------
+# =====================================================================
+# KEYWORD EDITOR (Toplevel)
+# =====================================================================
+
+class KeywordEditor(tk.Toplevel):
+    def __init__(self, parent, proj_path: str | None = None):
+        super().__init__(parent)
+        self.title("Keyword Editor - AutoCut Tool")
+        self.geometry("780x520")
+        self.configure(bg=DARK_BG)
+        self.transient(parent)
+        self.grab_set()
+
+        self.proj_path_var = tk.StringVar()
+        self.slug_var = tk.StringVar()
+        self.file_path_var = tk.StringVar()
+
+        self._build_ui()
+
+        # Nếu gọi với sẵn 1 project path -> load luôn
+        if proj_path:
+            self.set_project(proj_path)
+
+    # ---------------------------
+    def _build_ui(self):
+        pad = 10
+
+        frm = ttk.Frame(self, padding=10, style="Card.TFrame")
+        frm.pack(fill="both", expand=True)
+
+        row = 0
+        ttk.Label(
+            frm,
+            text="Chọn file Premiere (.prproj):",
+            style="Title.TLabel",
+        ).grid(row=row, column=0, sticky="w", padx=pad, pady=(pad, 4), columnspan=3)
+        row += 1
+
+        entry = ttk.Entry(frm, textvariable=self.proj_path_var, width=60)
+        entry.grid(row=row, column=0, sticky="we", padx=(pad, 4), pady=2, columnspan=2)
+        ttk.Button(frm, text="Browse...", style="Accent.TButton", command=self.choose_project).grid(
+            row=row, column=2, sticky="w", padx=(0, pad), pady=2
+        )
+        row += 1
+
+        ttk.Label(frm, text="Project slug:", style="LabelMuted.TLabel").grid(
+            row=row, column=0, sticky="w", padx=pad, pady=(4, 2)
+        )
+        ttk.Label(frm, textvariable=self.slug_var, style="LabelSub.TLabel").grid(
+            row=row, column=1, sticky="w", padx=pad, pady=(4, 2), columnspan=2
+        )
+        row += 1
+
+        ttk.Label(frm, text="File keyword (list_name.txt):", style="LabelMuted.TLabel").grid(
+            row=row, column=0, sticky="w", padx=pad, pady=(2, 2)
+        )
+        ttk.Label(frm, textvariable=self.file_path_var, style="LabelSub.TLabel").grid(
+            row=row, column=1, sticky="w", padx=pad, pady=(2, 2), columnspan=2
+        )
+        row += 1
+
+        ttk.Label(
+            frm,
+            text="Nhập mỗi dòng 1 KEYWORD (không cần đánh số).\nTool sẽ tự sinh '1 keyword', '2 keyword', ...",
+            style="LabelHint.TLabel",
+            wraplength=680,
+            justify="left",
+        ).grid(row=row, column=0, columnspan=3, sticky="w", padx=pad, pady=(8, 4))
+        row += 1
+
+        # Text box
+        text_frame = ttk.Frame(frm, style="CardInner.TFrame")
+        text_frame.grid(row=row, column=0, columnspan=3, sticky="nsew", padx=pad, pady=(2, 4))
+        self.text = tk.Text(
+            text_frame,
+            height=15,
+            wrap="word",
+            bg=DARK_BG_CARD,
+            fg=TEXT_PRIMARY,
+            insertbackground=ACCENT,
+            relief="flat",
+            bd=0,
+        )
+        self.text.pack(side="left", fill="both", expand=True, padx=(4, 0), pady=4)
+        scroll = ttk.Scrollbar(text_frame, orient="vertical", command=self.text.yview)
+        scroll.pack(side="right", fill="y", pady=4)
+        self.text.configure(yscrollcommand=scroll.set)
+
+        frm.rowconfigure(row, weight=1)
+        row += 1
+
+        # Buttons
+        btn_frame = ttk.Frame(frm, style="Card.TFrame")
+        btn_frame.grid(row=row, column=0, columnspan=3, sticky="e", padx=pad, pady=(8, pad))
+
+        ttk.Button(btn_frame, text="Load từ file", command=self.load_keywords).pack(
+            side="left", padx=(0, 6)
+        )
+        ttk.Button(btn_frame, text="Lưu keyword", style="Accent.TButton", command=self.save_keywords).pack(
+            side="left", padx=6
+        )
+        ttk.Button(btn_frame, text="Đóng", command=self.destroy).pack(
+            side="left", padx=(6, 0)
+        )
+
+        frm.columnconfigure(0, weight=1)
+        frm.columnconfigure(1, weight=1)
+
+    # ---------------------------
+    def set_project(self, path: str):
+        """Gán project path + slug + list_name.txt rồi load sẵn keyword."""
+        self.proj_path_var.set(path)
+        slug = derive_project_slug(path)
+        self.slug_var.set(slug)
+
+        proj_data_dir = os.path.join(DATA_DIR, slug)
+        os.makedirs(proj_data_dir, exist_ok=True)
+        names_path = os.path.join(proj_data_dir, "list_name.txt")
+        self.file_path_var.set(names_path)
+
+        self.load_keywords()
+
+    def choose_project(self):
+        path = filedialog.askopenfilename(
+            title="Chọn file Premiere",
+            filetypes=[("Premiere Project", "*.prproj"), ("All files", "*.*")],
+        )
+        if not path:
+            return
+        self.set_project(path)
+
+    # ---------------------------
+    def load_keywords(self):
+        path = self.file_path_var.get().strip()
+        if not path:
+            messagebox.showerror("Lỗi", "Chưa xác định được file list_name.txt.\nHãy chọn .prproj trước.")
+            return
+
+        self.text.delete("1.0", "end")
+
+        if not os.path.isfile(path):
+            # chưa có, coi như rỗng
+            return
+
+        try:
+            keywords: list[str] = []
+            with open(path, "r", encoding="utf-8", errors="ignore") as f:
+                for raw in f:
+                    line = raw.strip()
+                    if not line:
+                        continue
+                    # Bỏ qua dòng là link (https)
+                    if line.startswith("http://") or line.startswith("https://"):
+                        continue
+                    parts = line.split(maxsplit=1)
+                    if len(parts) == 2 and parts[0].isdigit():
+                        kw = parts[1].strip()
+                    else:
+                        kw = line
+                    if kw:
+                        keywords.append(kw)
+
+            if keywords:
+                self.text.insert("1.0", "\n".join(keywords))
+        except Exception as e:
+            messagebox.showerror("Lỗi", f"Không đọc được file keyword:\n{e}")
+
+    # ---------------------------
+    def save_keywords(self):
+        path = self.file_path_var.get().strip()
+        if not path:
+            messagebox.showerror("Lỗi", "Chưa xác định được file list_name.txt.\nHãy chọn .prproj trước.")
+            return
+
+        raw = self.text.get("1.0", "end")
+        lines = [ln.strip() for ln in raw.splitlines()]
+        keywords = [ln for ln in lines if ln]
+
+        if not keywords:
+            if not messagebox.askyesno(
+                "Xác nhận",
+                "Danh sách keyword đang trống.\nBạn có chắc muốn ghi file trống (sẽ xoá nội dung cũ)?",
+            ):
+                return
+
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                for idx, kw in enumerate(keywords, start=1):
+                    f.write(f"{idx} {kw}\n")
+            messagebox.showinfo(
+                "Đã lưu",
+                f"Đã lưu {len(keywords)} keyword vào:\n{path}",
+            )
+        except Exception as e:
+            messagebox.showerror("Lỗi", f"Không ghi được file keyword:\n{e}")
+
+
+# =====================================================================
+# MAIN GUI
+# =====================================================================
 
 class AutoToolGUI(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("AutoTool - Tự động hoá Premiere")
-        self.geometry("900x650")
-        self.resizable(False, False)
+        self.geometry("1040x700")
+        self.minsize(960, 640)
+        self.configure(bg=DARK_BG)
 
-        self.version_var = tk.StringVar(value="2022")
-        self.download_type_var = tk.StringVar(value="mp4")
+        # Core logic tách riêng, không phụ thuộc Tkinter
+        self.logic = AutoToolLogic(DATA_DIR)
+
+        self.version_var = tk.StringVar(value="2023")
+        self.download_type_var = tk.StringVar(value="mp4")  # mp4 | mp3
         self.mode_var = tk.StringVar(value="both")  # both | video | image
         self.regen_links_var = tk.BooleanVar(value=False)
         self.videos_per_keyword_var = tk.StringVar(value="10")
@@ -58,16 +251,26 @@ class AutoToolGUI(tk.Tk):
         self.batch_projects: list[str] = []
         self.premier_projects: list[str] = []
 
+        # progress bar
+        self.progress_var: tk.DoubleVar | None = None
+        self.progress_label_var: tk.StringVar | None = None
+
+        # trạng thái current tab (0: download, 1: premier)
+        self.active_tab = tk.IntVar(value=0)
+
         # Prevent saving while loading initial config
         self._loading_config = True
 
-        # Load previous config (if any) before building UI so variables are pre-populated
+        # style
+        self._init_style()
+
+        # Load previous config
         try:
             self._load_config()
         except Exception:
             pass
 
-        self._build_ui()
+        self._build_layout()
 
         # Populate batch list UI if loaded from config
         try:
@@ -88,6 +291,8 @@ class AutoToolGUI(tk.Tk):
             self._bind_config_traces()
         except Exception:
             pass
+
+        # Logging bridge (nếu có)
         try:
             from core import logging_bridge as _lb  # type: ignore
             _lb.register_gui_logger(self.log)
@@ -98,142 +303,587 @@ class AutoToolGUI(tk.Tk):
             self.log(f"CẢNH BÁO: Không kích hoạt được logging bridge: {e}")
         self.log("Sẵn sàng.")
 
-    def _build_ui(self):
-        pad = 8
-
-        # Create notebook for tabs
-        notebook = ttk.Notebook(self)
-        notebook.pack(fill="both", expand=True)
-
-        # Tab 1: Automation (current content)
-        tab1 = ttk.Frame(notebook, padding=10)
-        notebook.add(tab1, text="Auto Download")
-
-        main_frame = ttk.Frame(tab1, padding=10)
-        main_frame.pack(fill="both", expand=True)
-
-        # ------------------------------------------------------------------
+    # ------------------------------------------------------------------
+    def _init_style(self):
         style = ttk.Style()
+        # theme
+        try:
+            style.theme_use("clam")
+        except Exception:
+            pass
+
         style.configure(
-            "Custom.TButton",
-            font=("Segoe UI", 10, "bold")
+            "TFrame",
+            background=DARK_BG,
+        )
+        style.configure(
+            "Card.TFrame",
+            background=DARK_BG_ELEVATED,
+            relief="flat",
+        )
+        style.configure(
+            "CardInner.TFrame",
+            background=DARK_BG_CARD,
+            relief="flat",
+            borderwidth=1,
+        )
+        style.configure(
+            "Sidebar.TFrame",
+            background="#0D0D0D",
+        )
+        style.configure(
+            "TLabel",
+            background=DARK_BG,
+            foreground=TEXT_PRIMARY,
+        )
+        style.configure(
+            "Title.TLabel",
+            background=DARK_BG_ELEVATED,
+            foreground=TEXT_PRIMARY,
+            font=("Segoe UI", 12, "bold"),
+        )
+        style.configure(
+            "HeaderTitle.TLabel",
+            background="#0D0D0D",
+            foreground=TEXT_PRIMARY,
+            font=("Segoe UI Semibold", 14),
+        )
+        style.configure(
+            "HeaderSub.TLabel",
+            background="#0D0D0D",
+            foreground=TEXT_SECONDARY,
+            font=("Segoe UI", 9),
+        )
+        style.configure(
+            "LabelMuted.TLabel",
+            foreground=TEXT_SECONDARY,
+            background=DARK_BG_ELEVATED,
+            font=("Segoe UI", 9),
+        )
+        style.configure(
+            "LabelSub.TLabel",
+            foreground=TEXT_SECONDARY,
+            background=DARK_BG_ELEVATED,
+            font=("Segoe UI", 9),
+        )
+        style.configure(
+            "LabelHint.TLabel",
+            foreground=TEXT_SECONDARY,
+            background=DARK_BG_ELEVATED,
+            font=("Segoe UI", 9, "italic"),
+        )
+        style.configure(
+            "SidebarButton.TButton",
+            background="#0D0D0D",
+            foreground=TEXT_SECONDARY,
+            padding=8,
+            relief="flat",
+            borderwidth=0,
+            anchor="w",
+        )
+        style.map(
+            "SidebarButton.TButton",
+            background=[("active", "#151515"), ("selected", "#1F1F1F")],
+            foreground=[("active", TEXT_PRIMARY)],
+        )
+        style.configure(
+            "SidebarButtonActive.TButton",
+            background=ACCENT_SOFT,
+            foreground=TEXT_PRIMARY,
+        )
+        style.configure(
+            "Accent.TButton",
+            background=ACCENT,
+            foreground="#FFFFFF",
+            font=("Segoe UI", 9, "bold"),
+            padding=(10, 4),
+        )
+        style.map(
+            "Accent.TButton",
+            background=[("active", "#00CFA2")],
+        )
+        style.configure(
+            "TButton",
+            background=DARK_BG_CARD,
+            foreground=TEXT_PRIMARY,
+            padding=(8, 4),
+        )
+        style.map(
+            "TButton",
+            background=[("active", "#2C2C2C")],
+        )
+        style.configure(
+            "TEntry",
+            fieldbackground=DARK_BG_CARD,
+            foreground=TEXT_PRIMARY,
+            insertcolor=ACCENT,
+            borderwidth=0,
+        )
+        style.configure(
+            "TCombobox",
+            fieldbackground=DARK_BG_CARD,
+            foreground=TEXT_PRIMARY,
+            background=DARK_BG_CARD,
+        )
+        style.configure(
+            "Horizontal.TProgressbar",
+            troughcolor=DARK_BG_CARD,
+            background=ACCENT,
+            bordercolor=DARK_BG_CARD,
+            lightcolor=ACCENT,
+            darkcolor=ACCENT_SOFT,
         )
 
-        # Main content - Project selection and configuration
-        frm = ttk.Frame(main_frame, padding=10, relief="groove")
-        frm.pack(fill="both", expand=True)
-        row = 0
-        # Project selection section
-        ttk.Label(frm, text="Chọn file (.prproj):", font=("Segoe UI", 10, "bold")).grid(row=row, column=0, sticky="w", padx=pad, pady=(pad, 2))
-        row += 1
-        ttk.Button(frm, text="Thêm file...", command=self.add_batch_projects).grid(row=row, column=0, sticky="w", padx=pad, pady=(2, 2))
-        ttk.Button(frm, text="Xoá đã chọn", command=self.remove_selected_batch).grid(row=row, column=1, sticky="w", padx=pad, pady=(2, 2))
-        row += 1
-        self.batch_list = tk.Listbox(frm, height=8, selectmode="extended")
-        self.batch_list.grid(row=row, column=0, columnspan=2, sticky="nsew", padx=pad, pady=(2, 6))
-        bscroll = ttk.Scrollbar(frm, orient="vertical", command=self.batch_list.yview)
-        bscroll.grid(row=row, column=2, sticky="ns", pady=(2, 6))
+    # ------------------------------------------------------------------
+    def _build_layout(self):
+        # root grid
+        self.grid_rowconfigure(1, weight=1)
+        self.grid_columnconfigure(1, weight=1)
+
+        # HEADER
+        header = ttk.Frame(self, padding=(16, 10), style="Sidebar.TFrame")
+        header.grid(row=0, column=0, columnspan=2, sticky="nsew")
+        header.grid_columnconfigure(0, weight=1)
+
+        title_wrap = ttk.Frame(header, style="Sidebar.TFrame")
+        title_wrap.grid(row=0, column=0, sticky="w")
+        ttk.Label(
+            title_wrap,
+            text="AutoTool",
+            style="HeaderTitle.TLabel",
+        ).grid(row=0, column=0, sticky="w")
+        ttk.Label(
+            title_wrap,
+            text="Tự động hoá tải video/ảnh + dựng timeline cho Premiere",
+            style="HeaderSub.TLabel",
+        ).grid(row=1, column=0, sticky="w", pady=(2, 0))
+
+        tag = ttk.Label(
+            header,
+            text="2025 • Dark UI",
+            background=ACCENT_SOFT,
+            foreground=TEXT_PRIMARY,
+            padding=(10, 2),
+            font=("Segoe UI", 9),
+        )
+        tag.grid(row=0, column=1, sticky="e", padx=(0, 4))
+
+        # SIDEBAR (pseudo tabs)
+        sidebar = ttk.Frame(self, padding=(10, 10, 6, 10), style="Sidebar.TFrame")
+        sidebar.grid(row=1, column=0, sticky="nsew")
+        sidebar.grid_rowconfigure(3, weight=1)
+
+        ttk.Label(
+            sidebar,
+            text="Chế độ",
+            style="HeaderSub.TLabel",
+        ).grid(row=0, column=0, sticky="w", pady=(0, 4))
+
+        self.btn_tab_download = ttk.Button(
+            sidebar,
+            text="  ⬇  Auto Download",
+            style="SidebarButtonActive.TButton",
+            command=lambda: self._switch_tab(0),
+        )
+        self.btn_tab_download.grid(row=1, column=0, sticky="ew", pady=(0, 4))
+
+        self.btn_tab_premier = ttk.Button(
+            sidebar,
+            text="  🎬  Auto Premier",
+            style="SidebarButton.TButton",
+            command=lambda: self._switch_tab(1),
+        )
+        self.btn_tab_premier.grid(row=2, column=0, sticky="ew")
+
+        # small info
+        sep = ttk.Separator(sidebar, orient="horizontal")
+        sep.grid(row=3, column=0, sticky="ew", pady=(16, 8))
+        ttk.Label(
+            sidebar,
+            text="Cấu hình chung",
+            style="HeaderSub.TLabel",
+        ).grid(row=4, column=0, sticky="w", pady=(0, 4))
+
+        info_box = ttk.Frame(sidebar, padding=8, style="CardInner.TFrame")
+        info_box.grid(row=5, column=0, sticky="ew")
+        ttk.Label(
+            info_box,
+            text="• Chọn file .prproj\n• Nhập keyword trong Keyword Editor\n• Chạy Auto Download",
+            style="LabelHint.TLabel",
+            justify="left",
+        ).grid(row=0, column=0, sticky="w")
+
+        sidebar.grid_rowconfigure(6, weight=1)
+        footer = ttk.Label(
+            sidebar,
+            text="© AutoTool 2025",
+            style="HeaderSub.TLabel",
+        )
+        footer.grid(row=7, column=0, sticky="w", pady=(12, 0))
+
+        # MAIN CONTENT AREA (stacked frames)
+        content = ttk.Frame(self, padding=(4, 10, 10, 10), style="TFrame")
+        content.grid(row=1, column=1, sticky="nsew")
+        content.grid_rowconfigure(0, weight=1)
+        content.grid_columnconfigure(0, weight=1)
+
+        self.frame_download = ttk.Frame(content, padding=10, style="Card.TFrame")
+        self.frame_premier = ttk.Frame(content, padding=10, style="Card.TFrame")
+
+        self.frame_download.grid(row=0, column=0, sticky="nsew")
+        self.frame_premier.grid(row=0, column=0, sticky="nsew")
+
+        # Build content for each "tab"
+        self._build_download_tab(self.frame_download)
+        self._build_premier_tab(self.frame_premier)
+
+        # Status bar
+        status = ttk.Frame(self, padding=(10, 4), style="Sidebar.TFrame")
+        status.grid(row=2, column=0, columnspan=2, sticky="ew")
+        self.status_label = ttk.Label(
+            status,
+            text="Sẵn sàng.",
+            style="HeaderSub.TLabel",
+        )
+        self.status_label.grid(row=0, column=0, sticky="w")
+
+        self._switch_tab(0)
+
+    # ------------------------------------------------------------------
+    def _build_download_tab(self, parent: ttk.Frame):
+        pad = 8
+        parent.grid_rowconfigure(3, weight=1)
+        parent.grid_columnconfigure(1, weight=1)
+
+        # TOP: chọn project + config
+        header = ttk.Frame(parent, style="Card.TFrame")
+        header.grid(row=0, column=0, columnspan=2, sticky="ew")
+        header.grid_columnconfigure(0, weight=1)
+
+        ttk.Label(header, text="Auto Download", style="Title.TLabel").grid(
+            row=0, column=0, sticky="w", padx=pad, pady=(pad, 2)
+        )
+        ttk.Label(
+            header,
+            text="Tải video/ảnh theo keyword và sinh timeline cho Premiere",
+            style="LabelHint.TLabel",
+        ).grid(row=1, column=0, sticky="w", padx=pad, pady=(0, 8))
+
+        # LEFT: list project + buttons
+        proj_card = ttk.Frame(parent, padding=10, style="CardInner.TFrame")
+        proj_card.grid(row=1, column=0, sticky="nsew", padx=(0, 6))
+        proj_card.grid_rowconfigure(2, weight=1)
+
+        ttk.Label(proj_card, text="Danh sách project (.prproj)", style="LabelMuted.TLabel").grid(
+            row=0, column=0, columnspan=3, sticky="w", pady=(0, 4)
+        )
+        btn_row = ttk.Frame(proj_card, style="CardInner.TFrame")
+        btn_row.grid(row=1, column=0, columnspan=3, sticky="w", pady=(0, 4))
+        ttk.Button(btn_row, text="➕  Thêm file", command=self.add_batch_projects).pack(
+            side="left", padx=(0, 4)
+        )
+        ttk.Button(btn_row, text="🗑  Xoá đã chọn", command=self.remove_selected_batch).pack(
+            side="left", padx=(0, 4)
+        )
+
+        list_frame = ttk.Frame(proj_card, style="CardInner.TFrame")
+        list_frame.grid(row=2, column=0, columnspan=3, sticky="nsew")
+        self.batch_list = tk.Listbox(
+            list_frame,
+            height=8,
+            selectmode="extended",
+            bg=DARK_BG_CARD,
+            fg=TEXT_PRIMARY,
+            relief="flat",
+            bd=0,
+            highlightthickness=0,
+        )
+        self.batch_list.pack(side="left", fill="both", expand=True, padx=(2, 0), pady=(2, 2))
+        bscroll = ttk.Scrollbar(list_frame, orient="vertical", command=self.batch_list.yview)
+        bscroll.pack(side="right", fill="y", pady=(2, 2))
         self.batch_list.configure(yscrollcommand=bscroll.set)
-        frm.columnconfigure(0, weight=1)
+
+        # RIGHT: config
+        cfg_card = ttk.Frame(parent, padding=10, style="CardInner.TFrame")
+        cfg_card.grid(row=1, column=1, sticky="nsew", padx=(6, 0))
+        cfg_card.grid_columnconfigure(1, weight=1)
+
+        row = 0
+        ttk.Label(cfg_card, text="Cấu hình tải & AI", style="LabelMuted.TLabel").grid(
+            row=row, column=0, columnspan=2, sticky="w", pady=(0, 4)
+        )
         row += 1
 
-        # Configuration section
-        ttk.Label(frm, text="Cấu hình:", font=("Segoe UI", 10, "bold")).grid(row=row, column=0, sticky="w", padx=pad, pady=(8, 4))
-        row += 1
-        ttk.Label(frm, text="Phiên bản Premiere:").grid(row=row, column=0, sticky="w", padx=pad, pady=2)
-        ttk.Combobox(frm, textvariable=self.version_var, values=["2022", "2023", "2024", "2025"], width=12, state="readonly").grid(row=row, column=1, sticky="w", padx=pad, pady=2)
-        row += 1
-        ttk.Label(frm, text="Số video / từ khoá:").grid(row=row, column=0, sticky="w", padx=pad, pady=2)
-        ttk.Entry(frm, textvariable=self.videos_per_keyword_var, width=12).grid(row=row, column=1, sticky="w", padx=pad, pady=2)
-        row += 1
-        ttk.Label(frm, text="Thời lượng tối đa (phút):").grid(row=row, column=0, sticky="w", padx=pad, pady=2)
-        ttk.Entry(frm, textvariable=self.max_duration_var, width=12).grid(row=row, column=1, sticky="w", padx=pad, pady=2)
-        row += 1
-        ttk.Label(frm, text="Thời lượng tối thiểu (phút):").grid(row=row, column=0, sticky="w", padx=pad, pady=2)
-        ttk.Entry(frm, textvariable=self.min_duration_var, width=12).grid(row=row, column=1, sticky="w", padx=pad, pady=2)
-        row += 1
-        row += 1
-        ttk.Label(frm, text="Số ảnh / từ khoá:").grid(row=row, column=0, sticky="w", padx=pad, pady=2)
-        ttk.Entry(frm, textvariable=self.images_per_keyword_var, width=12).grid(row=row, column=1, sticky="w", padx=pad, pady=2)
-        row += 1
-        ttk.Label(frm, text="Chế độ chạy:").grid(row=row, column=0, sticky="w", padx=pad, pady=2)
-        ttk.Combobox(frm, textvariable=self.mode_var, values=["both", "video", "image"], width=12, state="readonly").grid(row=row, column=1, sticky="w", padx=pad, pady=2)
-        row += 1
-        # Regen links checkbox
-        ttk.Checkbutton(frm, text='Ép tạo lại link lần chạy sau', variable=self.regen_links_var).grid(row=row, column=0, sticky='w', padx=pad, pady=(2,0))
+        ttk.Label(cfg_card, text="Phiên bản Premiere:", style="LabelSub.TLabel").grid(
+            row=row, column=0, sticky="w", padx=pad, pady=2
+        )
+        ttk.Combobox(
+            cfg_card,
+            textvariable=self.version_var,
+            values=["2022", "2023", "2024", "2025"],
+            width=12,
+            state="readonly",
+        ).grid(row=row, column=1, sticky="w", padx=pad, pady=2)
         row += 1
 
-        # Buttons
-        btn_frame = ttk.Frame(frm)
-        btn_frame.grid(row=row, column=0, columnspan=3, sticky="w", padx=pad, pady=(12, 4))
-        ttk.Button(btn_frame, text="Kiểm tra", command=self.validate_inputs).pack(side="left", padx=(0, 6))
-        ttk.Button(btn_frame, text="Chạy Auto download", style="Custom.TButton", command=self.run_batch_automation).pack(side="left", padx=6)
-        ttk.Button(btn_frame, text="Trạng thái link", command=self.open_links_status_window).pack(side="left", padx=6)
-        ttk.Button(btn_frame, text="Xoá log", command=self.clear_log).pack(side="left", padx=6)
+        ttk.Label(cfg_card, text="Định dạng tải:", style="LabelSub.TLabel").grid(
+            row=row, column=0, sticky="w", padx=pad, pady=2
+        )
+        ttk.Combobox(
+            cfg_card,
+            textvariable=self.download_type_var,
+            values=["mp4", "mp3"],
+            width=12,
+            state="readonly",
+        ).grid(row=row, column=1, sticky="w", padx=pad, pady=2)
         row += 1
 
-        # Log section
-        ttk.Label(frm, text="Nhật ký:", font=("Segoe UI", 10, "bold")).grid(row=row, column=0, sticky="nw", padx=pad, pady=(12, 2))
-        self.log_text = tk.Text(frm, height=10, wrap="word")
-        self.log_text.grid(row=row, column=1, columnspan=2, sticky="nsew", padx=pad, pady=(12, 2))
-        scroll = ttk.Scrollbar(frm, orient="vertical", command=self.log_text.yview)
-        scroll.grid(row=row, column=3, sticky="ns", pady=(12, 2))
+        ttk.Label(cfg_card, text="Số video / keyword:", style="LabelSub.TLabel").grid(
+            row=row, column=0, sticky="w", padx=pad, pady=2
+        )
+        ttk.Entry(cfg_card, textvariable=self.videos_per_keyword_var, width=8).grid(
+            row=row, column=1, sticky="w", padx=pad, pady=2
+        )
+        row += 1
+
+        ttk.Label(cfg_card, text="Thời lượng tối đa (phút):", style="LabelSub.TLabel").grid(
+            row=row, column=0, sticky="w", padx=pad, pady=2
+        )
+        ttk.Entry(cfg_card, textvariable=self.max_duration_var, width=8).grid(
+            row=row, column=1, sticky="w", padx=pad, pady=2
+        )
+        row += 1
+
+        ttk.Label(cfg_card, text="Thời lượng tối thiểu (phút):", style="LabelSub.TLabel").grid(
+            row=row, column=0, sticky="w", padx=pad, pady=2
+        )
+        ttk.Entry(cfg_card, textvariable=self.min_duration_var, width=8).grid(
+            row=row, column=1, sticky="w", padx=pad, pady=2
+        )
+        row += 1
+
+        ttk.Label(cfg_card, text="Số ảnh / keyword:", style="LabelSub.TLabel").grid(
+            row=row, column=0, sticky="w", padx=pad, pady=2
+        )
+        ttk.Entry(cfg_card, textvariable=self.images_per_keyword_var, width=8).grid(
+            row=row, column=1, sticky="w", padx=pad, pady=2
+        )
+        row += 1
+
+        ttk.Label(cfg_card, text="Chế độ chạy:", style="LabelSub.TLabel").grid(
+            row=row, column=0, sticky="w", padx=pad, pady=2
+        )
+        ttk.Combobox(
+            cfg_card,
+            textvariable=self.mode_var,
+            values=["both", "video", "image"],
+            width=10,
+            state="readonly",
+        ).grid(row=row, column=1, sticky="w", padx=pad, pady=2)
+        row += 1
+
+        ttk.Checkbutton(
+            cfg_card,
+            text='Ép tạo lại link ở lần chạy sau',
+            variable=self.regen_links_var,
+            style="TCheckbutton",
+        ).grid(row=row, column=0, columnspan=2, sticky='w', padx=pad, pady=(4, 2))
+        row += 1
+
+        # ACTION BUTTONS
+        btn_frame = ttk.Frame(cfg_card, style="CardInner.TFrame")
+        btn_frame.grid(row=row, column=0, columnspan=2, sticky="w", padx=pad, pady=(10, 2))
+        ttk.Button(btn_frame, text="✔  Kiểm tra", command=self.validate_inputs).pack(
+            side="left", padx=(0, 6)
+        )
+        ttk.Button(
+            btn_frame,
+            text="▶  Chạy Auto download",
+            style="Accent.TButton",
+            command=self.run_batch_automation,
+        ).pack(side="left", padx=6)
+        ttk.Button(
+            btn_frame,
+            text="🔗  Trạng thái link",
+            command=self.open_links_status_window,
+        ).pack(side="left", padx=6)
+        ttk.Button(
+            btn_frame,
+            text="✏  Keyword Editor",
+            command=self.open_keyword_editor,
+        ).pack(side="left", padx=6)
+        ttk.Button(btn_frame, text="🧹  Xoá log", command=self.clear_log).pack(
+            side="left", padx=6
+        )
+
+        # PROGRESS + LOG
+        # Progress
+        progress_card = ttk.Frame(parent, padding=10, style="CardInner.TFrame")
+        progress_card.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(10, 0))
+        progress_card.grid_columnconfigure(1, weight=1)
+
+        ttk.Label(progress_card, text="Tiến độ", style="LabelMuted.TLabel").grid(
+            row=0, column=0, sticky="w", pady=(0, 4)
+        )
+        self.progress_var = tk.DoubleVar(value=0.0)
+        progress_bar = ttk.Progressbar(
+            progress_card,
+            maximum=100,
+            variable=self.progress_var,
+            mode="determinate",
+            length=300,
+            style="Horizontal.TProgressbar",
+        )
+        progress_bar.grid(row=0, column=1, sticky="we", padx=(8, 0))
+
+        self.progress_label_var = tk.StringVar(value="")
+        ttk.Label(
+            progress_card,
+            textvariable=self.progress_label_var,
+            style="LabelHint.TLabel",
+        ).grid(row=1, column=0, columnspan=2, sticky="w", pady=(2, 0))
+
+        # Log
+        log_card = ttk.Frame(parent, padding=10, style="CardInner.TFrame")
+        log_card.grid(row=3, column=0, columnspan=2, sticky="nsew", pady=(10, 0))
+        log_card.grid_rowconfigure(1, weight=1)
+        log_card.grid_columnconfigure(0, weight=1)
+
+        ttk.Label(log_card, text="Nhật ký Auto Download", style="LabelMuted.TLabel").grid(
+            row=0, column=0, sticky="w", pady=(0, 4)
+        )
+        self.log_text = tk.Text(
+            log_card,
+            height=10,
+            wrap="word",
+            bg=DARK_BG_CARD,
+            fg=TEXT_PRIMARY,
+            insertbackground=ACCENT,
+            relief="flat",
+            bd=0,
+        )
+        self.log_text.grid(
+            row=1, column=0, sticky="nsew", pady=(2, 2)
+        )
+        scroll = ttk.Scrollbar(log_card, orient="vertical", command=self.log_text.yview)
+        scroll.grid(row=1, column=1, sticky="ns", pady=(2, 2))
         self.log_text.configure(yscrollcommand=scroll.set)
-        frm.columnconfigure(1, weight=1)
-        frm.rowconfigure(row, weight=1)
 
-        # Tab 2: Auto Premier
-        tab2 = ttk.Frame(notebook, padding=10)
-        notebook.add(tab2, text="Auto Premier")
+    # ------------------------------------------------------------------
+    def _build_premier_tab(self, parent: ttk.Frame):
+        pad = 8
+        parent.grid_rowconfigure(2, weight=1)
+        parent.grid_columnconfigure(0, weight=1)
 
-        main_frame2 = ttk.Frame(tab2, padding=10)
-        main_frame2.pack(fill="both", expand=True)
+        ttk.Label(parent, text="Auto Premier", style="Title.TLabel").grid(
+            row=0, column=0, sticky="w", padx=pad, pady=(pad, 2)
+        )
+        ttk.Label(
+            parent,
+            text="Chạy script Premiere automation cho danh sách project.",
+            style="LabelHint.TLabel",
+        ).grid(row=1, column=0, sticky="w", padx=pad, pady=(0, 6))
 
-        frm2 = ttk.Frame(main_frame2, padding=10, relief="groove")
-        frm2.pack(fill="both", expand=True)
-        row2 = 0
-        # Project selection section
-        ttk.Label(frm2, text="Chọn file (.prproj) để auto:", font=("Segoe UI", 10, "bold")).grid(row=row2, column=0, sticky="w", padx=pad, pady=(pad, 2))
-        row2 += 1
-        ttk.Button(frm2, text="Thêm file...", command=self.add_premier_projects).grid(row=row2, column=0, sticky="w", padx=pad, pady=(2, 2))
-        ttk.Button(frm2, text="Xoá đã chọn", command=self.remove_selected_premier).grid(row=row2, column=1, sticky="w", padx=pad, pady=(2, 2))
-        row2 += 1
-        self.premier_list = tk.Listbox(frm2, height=8, selectmode="extended")
-        self.premier_list.grid(row=row2, column=0, columnspan=2, sticky="nsew", padx=pad, pady=(2, 6))
-        pscroll = ttk.Scrollbar(frm2, orient="vertical", command=self.premier_list.yview)
-        pscroll.grid(row=row2, column=2, sticky="ns", pady=(2, 6))
+        main = ttk.Frame(parent, padding=8, style="CardInner.TFrame")
+        main.grid(row=2, column=0, sticky="nsew", padx=4, pady=4)
+        main.grid_rowconfigure(2, weight=1)
+        main.grid_columnconfigure(0, weight=1)
+
+        # Project list
+        ttk.Label(main, text="Danh sách project (.prproj)", style="LabelMuted.TLabel").grid(
+            row=0, column=0, sticky="w", pady=(0, 4)
+        )
+        btn_row = ttk.Frame(main, style="CardInner.TFrame")
+        btn_row.grid(row=1, column=0, sticky="w", pady=(0, 4))
+        ttk.Button(btn_row, text="➕  Thêm file", command=self.add_premier_projects).pack(
+            side="left", padx=(0, 4)
+        )
+        ttk.Button(
+            btn_row, text="🗑  Xoá đã chọn", command=self.remove_selected_premier
+        ).pack(side="left", padx=(0, 4))
+        ttk.Button(
+            btn_row, text="⇄  Lấy từ tab Download", command=self.copy_from_automation
+        ).pack(side="left", padx=(0, 4))
+
+        list_frame = ttk.Frame(main, style="CardInner.TFrame")
+        list_frame.grid(row=2, column=0, sticky="nsew")
+        self.premier_list = tk.Listbox(
+            list_frame,
+            height=8,
+            selectmode="extended",
+            bg=DARK_BG_CARD,
+            fg=TEXT_PRIMARY,
+            relief="flat",
+            bd=0,
+            highlightthickness=0,
+        )
+        self.premier_list.pack(side="left", fill="both", expand=True, padx=(2, 0), pady=(2, 2))
+        pscroll = ttk.Scrollbar(list_frame, orient="vertical", command=self.premier_list.yview)
+        pscroll.pack(side="right", fill="y", pady=(2, 2))
         self.premier_list.configure(yscrollcommand=pscroll.set)
-        frm2.columnconfigure(0, weight=1)
-        row2 += 1
 
-        # Buttons
-        btn_frame2 = ttk.Frame(frm2)
-        btn_frame2.grid(row=row2, column=0, columnspan=3, sticky="w", padx=pad, pady=(12, 4))
-        ttk.Button(btn_frame2, text="Lấy từ tab Download", command=self.copy_from_automation).pack(side="left", padx=(0, 6))
-        ttk.Button(btn_frame2, text="Chạy Auto Premier", style="Custom.TButton", command=self.run_premier_automation).pack(side="left", padx=6)
-        ttk.Button(btn_frame2, text="Xoá log", command=self.clear_log2).pack(side="left", padx=6)
-        row2 += 1
+        # Buttons + log
+        action_row = ttk.Frame(main, style="CardInner.TFrame")
+        action_row.grid(row=3, column=0, sticky="w", pady=(8, 0))
+        ttk.Button(
+            action_row,
+            text="▶  Chạy Auto Premier",
+            style="Accent.TButton",
+            command=self.run_premier_automation,
+        ).pack(side="left", padx=(0, 6))
+        ttk.Button(action_row, text="🧹  Xoá log", command=self.clear_log2).pack(
+            side="left", padx=4
+        )
 
-        # Log section (shared with tab1)
-        ttk.Label(frm2, text="Nhật ký:", font=("Segoe UI", 10, "bold")).grid(row=row2, column=0, sticky="nw", padx=pad, pady=(12, 2))
-        self.log_text2 = tk.Text(frm2, height=10, wrap="word")
-        self.log_text2.grid(row=row2, column=1, columnspan=2, sticky="nsew", padx=pad, pady=(12, 2))
-        scroll2 = ttk.Scrollbar(frm2, orient="vertical", command=self.log_text2.yview)
-        scroll2.grid(row=row2, column=3, sticky="ns", pady=(12, 2))
+        log_card = ttk.Frame(main, style="CardInner.TFrame")
+        log_card.grid(row=4, column=0, sticky="nsew", pady=(10, 0))
+        log_card.grid_rowconfigure(1, weight=1)
+        log_card.grid_columnconfigure(0, weight=1)
+
+        ttk.Label(log_card, text="Nhật ký Auto Premier", style="LabelMuted.TLabel").grid(
+            row=0, column=0, sticky="w", pady=(0, 4)
+        )
+        self.log_text2 = tk.Text(
+            log_card,
+            height=10,
+            wrap="word",
+            bg=DARK_BG_CARD,
+            fg=TEXT_PRIMARY,
+            insertbackground=ACCENT,
+            relief="flat",
+            bd=0,
+        )
+        self.log_text2.grid(
+            row=1, column=0, sticky="nsew", pady=(2, 2)
+        )
+        scroll2 = ttk.Scrollbar(log_card, orient="vertical", command=self.log_text2.yview)
+        scroll2.grid(row=1, column=1, sticky="ns", pady=(2, 2))
         self.log_text2.configure(yscrollcommand=scroll2.set)
-        frm2.columnconfigure(1, weight=1)
-        frm2.rowconfigure(row2, weight=1)
 
     # ------------------------------------------------------------------
+    def _switch_tab(self, idx: int):
+        self.active_tab.set(idx)
+        if idx == 0:
+            self.frame_download.tkraise()
+            self.btn_tab_download.configure(style="SidebarButtonActive.TButton")
+            self.btn_tab_premier.configure(style="SidebarButton.TButton")
+        else:
+            self.frame_premier.tkraise()
+            self.btn_tab_download.configure(style="SidebarButton.TButton")
+            self.btn_tab_premier.configure(style="SidebarButtonActive.TButton")
+
+    # =================================================================
     # Utility methods
-    # ------------------------------------------------------------------
+    # =================================================================
     def log(self, msg: str):
         self.log_text.insert("end", msg + "\n")
         self.log_text.see("end")
+        self.status_label.config(text=msg)
 
     def log2(self, msg: str):
         self.log_text2.insert("end", msg + "\n")
         self.log_text2.see("end")
+        self.status_label.config(text=msg)
 
     def clear_log(self):
         self.log_text.delete("1.0", "end")
@@ -241,9 +891,61 @@ class AutoToolGUI(tk.Tk):
     def clear_log2(self):
         self.log_text2.delete("1.0", "end")
 
-    # ------------------------------------------------------------------
-    # Validation & folder ops
-    # ------------------------------------------------------------------
+    # Progress helpers
+    def reset_progress(self):
+        try:
+            if self.progress_var is not None:
+                self.progress_var.set(0.0)
+            if self.progress_label_var is not None:
+                self.progress_label_var.set("")
+            self.update_idletasks()
+        except Exception:
+            pass
+
+    def update_progress(self, value: float, message: str | None = None):
+        """Cập nhật thanh tiến độ tổng hợp (0–100)."""
+        try:
+            v = max(0.0, min(100.0, float(value)))
+            if self.progress_var is not None:
+                self.progress_var.set(v)
+            if message is not None and self.progress_label_var is not None:
+                self.progress_label_var.set(str(message))
+            self.update_idletasks()
+        except Exception:
+            pass
+
+    # =================================================================
+    # Keyword editor opener
+    # =================================================================
+    def open_keyword_editor(self):
+        """Mở cửa sổ sửa keyword cho project đang chọn trong tab Download."""
+        proj_path = None
+
+        # Ưu tiên: project đang được chọn trong list
+        try:
+            sel = self.batch_list.curselection()
+            if sel:
+                proj_path = self.batch_list.get(sel[0])
+        except Exception:
+            proj_path = None
+
+        # Nếu chưa chọn gì mà vẫn có project -> lấy phần tử đầu
+        if proj_path is None and self.batch_projects:
+            proj_path = self.batch_projects[0]
+
+        if not proj_path:
+            messagebox.showwarning(
+                "Keyword Editor",
+                "Chưa có project nào trong tab Download.\n"
+                "Hãy thêm ít nhất 1 file .prproj.",
+            )
+            return
+
+        KeywordEditor(self, proj_path)
+
+    # =================================================================
+    # Validation
+    # =================================================================
     def validate_inputs(self):
         version = self.version_var.get().strip()
         mode = self.mode_var.get().strip()
@@ -253,214 +955,36 @@ class AutoToolGUI(tk.Tk):
             self.log("LỖI: Chưa chọn file .prproj nào.")
             ok = False
         else:
-            # Validate each project file
             invalid_projects = []
             for proj in self.batch_projects:
                 if not os.path.isfile(proj):
                     invalid_projects.append(proj)
                 elif not proj.lower().endswith(".prproj"):
                     self.log(f"CẢNH BÁO: File không có đuôi .prproj: {proj}")
-            
+
             if invalid_projects:
                 self.log(f"LỖI: Không tìm thấy file project: {', '.join(invalid_projects)}")
                 ok = False
 
-        self.log(f"Phiên bản Premiere: {version}; Chế độ: {mode}; Số project: {len(self.batch_projects) if self.batch_projects else 0}")
+        self.log(
+            f"Phiên bản Premiere: {version}; "
+            f"Chế độ: {mode}; "
+            f"Số project: {len(self.batch_projects) if self.batch_projects else 0}"
+        )
         if ok:
             self.log("Kiểm tra hợp lệ.")
-            messagebox.showinfo("Kiểm tra", "Thông tin hợp lệ (có thể tạo).")
+            messagebox.showinfo("Kiểm tra", "Thông tin hợp lệ (có thể chạy).")
         else:
             messagebox.showerror("Kiểm tra", "Không hợp lệ. Xem log.")
 
-    # (Đã loại bỏ input 'Thư mục con' và nút tạo thư mục)
-
-    # ------------------------------------------------------------------
-    # Automation placeholder
-    # ------------------------------------------------------------------
-    def run_automation_for_project(self, proj_path: str):
-        # Set up resource folder for this project
-        proj_dir = os.path.dirname(os.path.abspath(proj_path))
-        parent = os.path.join(proj_dir, 'resource')
-        
-        version = self.version_var.get().strip()
-        dtype = self.download_type_var.get()
-        mode = self.mode_var.get().strip()
-        
-        self.log("=== BẮT ĐẦU TỰ ĐỘNG ===")
-        
-        # Create resource directory if it doesn't exist
-        if not os.path.isdir(parent):
-            try:
-                os.makedirs(parent, exist_ok=True)
-                self.log(f"Đã tạo thư mục chứa nội dung: {parent}")
-            except Exception as e:
-                self.log(f"LỖI: Không tạo được thư mục cha: {e}")
-                return
-        
-        if not os.path.isfile(proj_path):
-            self.log("LỖI: Thiếu file project. Dừng.")
-            return
-        
-        # Lazy import heavy modules only now to avoid initial GUI lag.
-        try:
-            from ..core.downloadTool import get_name_list, down_by_yt, get_link  # type: ignore
-        except Exception:
-            try:
-                import importlib
-                get_name_list = importlib.import_module("core.downloadTool.get_name_list")  # type: ignore
-                down_by_yt = importlib.import_module("core.downloadTool.down_by_yt")  # type: ignore
-                get_link = importlib.import_module("core.downloadTool.get_link")  # type: ignore
-            except Exception as e:
-                self.log(f"ERROR: Cannot import modules (core.downloadTool.*): {e}")
-                return
-
-        # Build absolute paths (PyInstaller aware: use _MEIPASS if present)
-        base_dir = getattr(sys, "_MEIPASS", _ROOT_DIR)  # noqa: F841 (reserved for future use)
-        # Xây dựng thư mục data riêng cho mỗi project (.prproj) dựa trên tên file
-        safe_project = self._derive_project_slug(proj_path)
-        data_project_dir = os.path.join(DATA_DIR, safe_project)
-        if not os.path.isdir(data_project_dir):
-            try:
-                os.makedirs(data_project_dir, exist_ok=True)
-                self.log(f"Đã tạo thư mục dữ liệu project: {data_project_dir}")
-            except Exception as e:
-                self.log(f"LỖI: Không tạo được thư mục dữ liệu project ({e})")
-                return
-        names_txt = os.path.join(data_project_dir, "list_name.txt")
-        # đảm bảo thư mục data gốc tồn tại (fallback)
-        if not os.path.isdir(DATA_DIR):
-            try:
-                os.makedirs(DATA_DIR, exist_ok=True)
-            except Exception:
-                self.log(f"CẢNH BÁO: Không tạo được thư mục data gốc: {DATA_DIR}")
-
-        # Thư mục lưu link: luôn dùng thư mục project trong data
-        links_dir = data_project_dir
-        self.log(f"Thư mục lưu link: {links_dir}")
-        links_txt = os.path.join(links_dir, "dl_links.txt")       # list of grouped video links
-        links_img_txt = os.path.join(links_dir, "dl_links_image.txt")  # list of grouped image links
-
-        # 1. Extract names
-        try:
-            # Ghi marker cho ExtendScript (getTimeline / cutAndPush) biết subfolder đang dùng
-            try:
-                from core.project_data import write_current_project_marker  # type: ignore
-                write_current_project_marker(safe_project)
-                self.log(f"Đánh dấu project hiện tại: {safe_project}")
-            except Exception as _pmErr:
-                self.log(f"CẢNH BÁO: Không ghi được marker project ({_pmErr})")
-            get_name_list.extract_instance_names(proj_path, save_txt=names_txt, project_name=safe_project)
-            self.log(f"Đã trích tên instance -> {names_txt}")
-        except Exception as e:
-            self.log(f"LỖI khi trích tên: {e}")
-            return
-
-        # 2. Generate links file if missing or stale (> 1h old)
-        # Quyết định regen dựa trên override + tuổi file
-        # Tạo link theo chế độ đã chọn
-        try:
-            # Read parameters
-            try:
-                mpk = int(self.videos_per_keyword_var.get().strip() or '10')
-            except Exception:
-                mpk = 10
-            try:
-                mx_max = int(self.max_duration_var.get().strip() or '20')
-            except Exception:
-                mx_max = 20
-            try:
-                mn_min = int(self.min_duration_var.get().strip() or '4')
-            except Exception:
-                mn_min = 4
-            max_minutes = mx_max if mx_max > 0 else None
-            min_minutes = mn_min if mn_min > 0 else None
-            try:
-                ipk = int(self.images_per_keyword_var.get().strip() or '10')
-            except Exception:
-                ipk = 10
-
-            force_flag = self.regen_links_var.get()
-            mode_l = mode.lower()
-            if mode_l == 'both':
-                self.log("Đang tạo link (cả VIDEO và ẢNH)...")
-                get_link.get_links_main(
-                    names_txt,
-                    links_txt,
-                    project_name=safe_project,
-                    max_per_keyword=mpk,
-                    max_minutes=max_minutes,
-                    min_minutes=min_minutes,
-                    images_per_keyword=ipk,
-                )
-                self.log(f"Đã tạo link VIDEO -> {links_txt}")
-                self.log(f"Đã tạo link ẢNH -> {links_img_txt}")
-            elif mode_l == 'video':
-                do_regen = True
-                if os.path.isfile(links_txt) and force_flag is False:
-                    do_regen = False
-                    self.log("Giữ lại link VIDEO hiện có (user chọn)")
-                if do_regen:
-                    self.log("Đang tạo link VIDEO...")
-                    get_link.get_links_main_video(
-                        names_txt,
-                        links_txt,
-                        project_name=safe_project,
-                        max_per_keyword=mpk,
-                        max_minutes=max_minutes,
-                        min_minutes=min_minutes,
-                    )
-            elif mode_l == 'image':
-                do_regen = True
-                if os.path.isfile(links_img_txt) and force_flag is False:
-                    do_regen = False
-                    self.log("Giữ lại link ẢNH hiện có (user chọn)")
-                if do_regen:
-                    self.log("Đang tạo link ẢNH...")
-                    get_link.get_links_main_image(
-                        names_txt,
-                        links_img_txt,
-                        project_name=safe_project,
-                        images_per_keyword=ipk,
-                    )
-        except Exception as e:
-            self.log(f"CẢNH BÁO: Không tạo được link ({e}).")
-
-        # 3. Run download logic theo chế độ
-        mode_l = mode.lower()
-        if mode_l in ('both', 'video'):
-            try:
-                down_by_yt.download_main(parent, links_txt, _type=dtype)
-                self.log("Tải VIDEO xong.")
-            except Exception as e:
-                self.log(f"LỖI khi tải VIDEO: {e}")
-                return
-        if mode_l in ('both', 'image'):
-            # Import downImage lazily to download images
-            try:
-                import importlib
-                down_image = importlib.import_module("core.downloadTool.downImage")
-            except Exception as e:
-                self.log(f"LỖI: Không thể import downImage: {e}")
-                return
-            try:
-                attempted = down_image.download_images_main(parent, links_img_txt)
-                self.log(f"Đã gửi tải {attempted} ảnh. Xem kết quả trong các thư mục *_img tại: {parent}")
-            except Exception as e:
-                self.log(f"LỖI khi tải ẢNH: {e}")
-                return
-
-        # Nhật ký tổng kết
-        self.log(f"Project: {proj_path}")
-        self.log(f"Phiên bản Premiere: {version}")
-        self.log(f"Định dạng tải: {dtype}")
-        self.log("Hoàn tất quy trình.")
-        self.log("=== KẾT THÚC TỰ ĐỘNG ===")
-
-    # ------------------------------------------------------------------
+    # =================================================================
     # Batch helpers
-    # ------------------------------------------------------------------
+    # =================================================================
     def add_batch_projects(self):
-        files = filedialog.askopenfilenames(title="Chọn nhiều file .prproj", filetypes=[("Premiere Project", "*.prproj"), ("All files", "*.*")])
+        files = filedialog.askopenfilenames(
+            title="Chọn nhiều file .prproj",
+            filetypes=[("Premiere Project", "*.prproj"), ("All files", "*.*")],
+        )
         if not files:
             return
         added = 0
@@ -496,12 +1020,28 @@ class AutoToolGUI(tk.Tk):
         if not self.batch_projects:
             messagebox.showwarning("Batch", "Chưa có file .prproj nào trong danh sách.")
             return
+
         self.log(f"=== BẮT ĐẦU CHẠY HÀNG LOẠT ({len(self.batch_projects)} project) ===")
         for i, proj_path in enumerate(self.batch_projects, start=1):
             try:
                 self.log(f"-- ({i}/{len(self.batch_projects)}) {proj_path}")
-                # Run automation for each project with its own resource folder
-                self.run_automation_for_project(proj_path)
+                self.reset_progress()
+
+                # Gọi core logic
+                self.logic.run_automation_for_project(
+                    proj_path,
+                    version=self.version_var.get().strip(),
+                    download_type=self.download_type_var.get().strip(),
+                    mode=self.mode_var.get().strip(),
+                    videos_per_keyword=self.videos_per_keyword_var.get().strip(),
+                    images_per_keyword=self.images_per_keyword_var.get().strip(),
+                    max_duration=self.max_duration_var.get().strip(),
+                    min_duration=self.min_duration_var.get().strip(),
+                    regen_links=bool(self.regen_links_var.get()),
+                    log=self.log,
+                    update_progress=self.update_progress,
+                )
+
                 self.update()
             except Exception as e:
                 self.log(f"LỖI batch item: {e}")
@@ -511,11 +1051,14 @@ class AutoToolGUI(tk.Tk):
         except Exception:
             pass
 
-    # ------------------------------------------------------------------
+    # =================================================================
     # Premier helpers
-    # ------------------------------------------------------------------
+    # =================================================================
     def add_premier_projects(self):
-        files = filedialog.askopenfilenames(title="Chọn nhiều file .prproj", filetypes=[("Premiere Project", "*.prproj"), ("All files", "*.*")])
+        files = filedialog.askopenfilenames(
+            title="Chọn nhiều file .prproj",
+            filetypes=[("Premiere Project", "*.prproj"), ("All files", "*.*")],
+        )
         if not files:
             return
         added = 0
@@ -550,16 +1093,17 @@ class AutoToolGUI(tk.Tk):
     def copy_from_automation(self):
         self.premier_projects = list(self.batch_projects)
         self._refresh_premier_listbox()
-        self.log2(f"Đã sao chép {len(self.premier_projects)} project từ tab Automation.")
+        self.log2(f"Đã sao chép {len(self.premier_projects)} project từ tab Download.")
 
     def run_premier_automation(self):
         try:
-            import importlib
             from core.premierCore.control import run_premier_script  # type: ignore
         except Exception:
             try:
                 import importlib
-                run_premier_script = importlib.import_module("core.premierCore.control").run_premier_script  # type: ignore
+                run_premier_script = importlib.import_module(
+                    "core.premierCore.control"
+                ).run_premier_script  # type: ignore
             except Exception as e:
                 self.log2(f"LỖI: Không thể import run_premier_script: {e}")
                 run_premier_script = None
@@ -569,17 +1113,25 @@ class AutoToolGUI(tk.Tk):
         if run_premier_script is None:
             self.log2("LỖI: Không thể import run_premier_script từ control.py")
             return
-        self.log2(f"=== BẮT ĐẦU CHẠY PREMIER AUTOMATION ({len(self.premier_projects)} project) ===")
+        self.log2(
+            f"=== BẮT ĐẦU CHẠY PREMIER AUTOMATION ({len(self.premier_projects)} project) ==="
+        )
         num = 0
         for i, proj_path in enumerate(self.premier_projects, start=1):
             try:
                 self.log2(f"-- ({i}/{len(self.premier_projects)}) {proj_path}")
-                # Update path.txt
                 project_slug = self._derive_project_slug(proj_path)
                 data_folder = os.path.join(DATA_DIR, project_slug).replace('\\', '/')
                 project_path_unix = proj_path.replace('\\', '/')
-                resource_dir = os.path.join(os.path.dirname(proj_path), 'resource').replace('\\', '/')
-                path_txt_content = f"project_slug={project_slug}\ndata_folder={data_folder}\nproject_path={project_path_unix}\nresource_dir={resource_dir}\n"
+                resource_dir = os.path.join(
+                    os.path.dirname(proj_path), 'resource'
+                ).replace('\\', '/')
+                path_txt_content = (
+                    f"project_slug={project_slug}\n"
+                    f"data_folder={data_folder}\n"
+                    f"project_path={project_path_unix}\n"
+                    f"resource_dir={resource_dir}\n"
+                )
                 path_txt_path = os.path.join(DATA_DIR, 'path.txt')
                 try:
                     with open(path_txt_path, 'w', encoding='utf-8') as f:
@@ -588,10 +1140,10 @@ class AutoToolGUI(tk.Tk):
                 except Exception as e:
                     self.log2(f"LỖI khi ghi path.txt: {e}")
                     continue
-                # Run premier script
-                proj_path = '\"' + proj_path.replace('/', '\\') + '\"'  # ensure backslashes for Windows paths
+
+                proj_path_win = '"' + proj_path.replace('/', '\\') + '"'  # for Windows
                 num += 1
-                run_premier_script(None, proj_path, num)
+                run_premier_script(None, proj_path_win, num)
                 self.update()
             except Exception as e:
                 self.log2(f"LỖI premier item: {e}")
@@ -609,82 +1161,76 @@ class AutoToolGUI(tk.Tk):
         except Exception:
             pass
 
+    # =================================================================
+    # Download images (nếu chỉ muốn tải ảnh)
+    # =================================================================
     def run_download_images(self):
         if not self.batch_projects:
             self.log("LỖI: Chưa chọn file .prproj nào.")
             return
-        
-        # Use the first project in the batch list
+
         proj = self.batch_projects[0]
-        proj_dir = os.path.dirname(os.path.abspath(proj))
-        parent = os.path.join(proj_dir, 'resource')
-        
-        if not os.path.isdir(parent):
-            try:
-                os.makedirs(parent, exist_ok=True)
-                self.log(f"Đã tạo thư mục chứa nội dung: {parent}")
-            except Exception as e:
-                self.log(f"LỖI: Không tạo được thư mục cha: {e}")
-                return
-        
-        safe_project = self._derive_project_slug(proj)
-        links_dir = os.path.join(DATA_DIR, safe_project)
-        links_img_txt = os.path.join(links_dir, "dl_links_image.txt")
-        if not os.path.isfile(links_img_txt):
-            self.log(f"LỖI: Không tìm thấy file link ảnh: {links_img_txt}")
-            self.log("Hãy chạy 'Chạy tự động' để tạo link trước hoặc kiểm tra thư mục link tuỳ chọn.")
-            return
-        # Import downImage lazily
-        try:
-            import importlib
-            down_image = importlib.import_module("core.downloadTool.downImage")
-        except Exception as e:
-            self.log(f"LỖI: Không thể import downImage: {e}")
-            return
-        try:
-            attempted = down_image.download_images_main(parent, links_img_txt)
-            self.log(f"Đã gửi tải {attempted} ảnh. Xem kết quả trong các thư mục *_img tại: {parent}")
-        except Exception as e:
-            self.log(f"LỖI khi tải ảnh: {e}")
-        # Save config after operation
+
+        # Gọi core logic (không dính Tkinter)
+        self.logic.run_download_images(proj, log=self.log)
+
         try:
             self._save_config()
         except Exception:
             pass
 
-    # --------------------------------------------------------------
-    # Helper: derive project slug (shared between main & status window)
-    # --------------------------------------------------------------
+    # =================================================================
+    # Helper slug
+    # =================================================================
     def _derive_project_slug(self, proj_path: str) -> str:
-        project_filename = os.path.basename(proj_path)
-        stem, _ = os.path.splitext(project_filename)
-        return ''.join(ch if ch.isalnum() or ch in ('-', '_') else '_' for ch in stem)
-    # --------------------------------------------------------------
+        return derive_project_slug(proj_path)
+
+    # =================================================================
     # Links status window
-    # --------------------------------------------------------------
+    # =================================================================
     def open_links_status_window(self):
-        proj = self.project_file_var.get().strip()
-        if not proj:
-            self.log("LỖI: Chọn file .prproj trước khi xem link.")
+        proj_path = None
+        try:
+            sel = self.batch_list.curselection()
+            if sel:
+                proj_path = self.batch_list.get(sel[0])
+        except Exception:
+            proj_path = None
+
+        if proj_path is None and self.batch_projects:
+            proj_path = self.batch_projects[0]
+
+        if not proj_path:
+            self.log("LỖI: Chưa có project nào trong tab Download.")
+            messagebox.showwarning("Trạng thái link", "Chưa có project nào trong tab Download.")
             return
-        slug = self._derive_project_slug(proj)
+
+        slug = self._derive_project_slug(proj_path)
         project_dir = os.path.join(DATA_DIR, slug)
         links_path = os.path.join(project_dir, 'dl_links.txt')
         names_path = os.path.join(project_dir, 'list_name.txt')
-        groups, links = self._compute_links_stats(links_path)
+        groups, links = compute_links_stats(links_path)
 
         win = tk.Toplevel(self)
         win.title(f"Trạng thái Link - {slug}")
-        win.geometry('420x260')
-        win.resizable(False, False)
+        win.geometry('430x280')
+        win.configure(bg=DARK_BG)
+        win.transient(self)
+        win.grab_set()
 
-        pad = 8
-        info_frame = ttk.Frame(win, padding=pad)
+        pad = 10
+        info_frame = ttk.Frame(win, padding=pad, style="Card.TFrame")
         info_frame.pack(fill='both', expand=True)
 
-        ttk.Label(info_frame, text=f"Mã project: {slug}").grid(row=0, column=0, sticky='w', pady=(0,4))
-        ttk.Label(info_frame, text="Thư mục dữ liệu project:").grid(row=1, column=0, sticky='w')
-        ttk.Label(info_frame, text=project_dir, foreground='#444').grid(row=2, column=0, sticky='w', pady=(0,6))
+        ttk.Label(info_frame, text=f"Project: {proj_path}", style="LabelSub.TLabel").grid(
+            row=0, column=0, sticky='w', pady=(0, 4)
+        )
+        ttk.Label(info_frame, text="Thư mục dữ liệu project:", style="LabelMuted.TLabel").grid(
+            row=1, column=0, sticky='w'
+        )
+        ttk.Label(info_frame, text=project_dir, style="LabelSub.TLabel").grid(
+            row=2, column=0, sticky='w', pady=(0, 6)
+        )
 
         if os.path.isfile(names_path):
             try:
@@ -695,88 +1241,54 @@ class AutoToolGUI(tk.Tk):
         else:
             raw_names = []
 
-        ttk.Label(info_frame, text=f"File tên instance: {len(raw_names)} dòng").grid(row=3, column=0, sticky='w')
-        ttk.Label(info_frame, text=f"File link: {'TÌM THẤY' if os.path.isfile(links_path) else 'THIẾU'}").grid(row=4, column=0, sticky='w')
-        ttk.Label(info_frame, text=f"Số nhóm: {groups}").grid(row=5, column=0, sticky='w')
-        ttk.Label(info_frame, text=f"Tổng link: {links}").grid(row=6, column=0, sticky='w')
+        ttk.Label(info_frame, text=f"File tên instance: {len(raw_names)} dòng", style="LabelSub.TLabel").grid(
+            row=3, column=0, sticky='w'
+        )
+        ttk.Label(
+            info_frame,
+            text=f"File link: {'TÌM THẤY ✅' if os.path.isfile(links_path) else 'THIẾU ⚠'}",
+            style="LabelSub.TLabel",
+        ).grid(row=4, column=0, sticky='w', pady=(2, 2))
+        ttk.Label(info_frame, text=f"Số nhóm keyword: {groups}", style="LabelSub.TLabel").grid(
+            row=5, column=0, sticky='w'
+        )
+        ttk.Label(info_frame, text=f"Tổng số link: {links}", style="LabelSub.TLabel").grid(
+            row=6, column=0, sticky='w'
+        )
 
-        ttk.Separator(info_frame, orient='horizontal').grid(row=7, column=0, sticky='ew', pady=6)
+        ttk.Separator(info_frame, orient='horizontal').grid(
+            row=7, column=0, sticky='ew', pady=8
+        )
 
-        btns = ttk.Frame(info_frame)
-        btns.grid(row=8, column=0, sticky='e', pady=(10,0))
-        ttk.Button(btns, text='Làm mới', command=lambda: self._refresh_links_window(win, project_dir, links_path, names_path)).pack(side='left', padx=(0,6))
+        btns = ttk.Frame(info_frame, style="Card.TFrame")
+        btns.grid(row=8, column=0, sticky='e', pady=(4, 0))
         ttk.Button(btns, text='Đóng', command=win.destroy).pack(side='left')
 
-    def _refresh_links_window(self, win, project_dir, links_path, names_path):
-        # Làm mới nội dung cửa sổ trạng thái link
-        try:
-            for child in win.winfo_children():
-                child.destroy()
-        except Exception:
-            return
-        groups, links = self._compute_links_stats(links_path)
-        try:
-            with open(names_path, 'r', encoding='utf-8', errors='ignore') as f:
-                raw_names = [ln.strip() for ln in f if ln.strip()]
-        except Exception:
-            raw_names = []
-        pad = 8
-        info_frame = ttk.Frame(win, padding=pad)
-        info_frame.pack(fill='both', expand=True)
-        slug = os.path.basename(project_dir)
-        ttk.Label(info_frame, text=f"Mã project: {slug}").grid(row=0, column=0, sticky='w', pady=(0,4))
-        ttk.Label(info_frame, text="Thư mục dữ liệu project:").grid(row=1, column=0, sticky='w')
-        ttk.Label(info_frame, text=project_dir, foreground='#444').grid(row=2, column=0, sticky='w', pady=(0,6))
-        ttk.Label(info_frame, text=f"File tên instance: {len(raw_names)} dòng").grid(row=3, column=0, sticky='w')
-        ttk.Label(info_frame, text=f"File link: {'TÌM THẤY' if os.path.isfile(links_path) else 'THIẾU'}").grid(row=4, column=0, sticky='w')
-        ttk.Label(info_frame, text=f"Số nhóm: {groups}").grid(row=5, column=0, sticky='w')
-        ttk.Label(info_frame, text=f"Tổng link: {links}").grid(row=6, column=0, sticky='w')
-        ttk.Separator(info_frame, orient='horizontal').grid(row=7, column=0, sticky='ew', pady=6)
-        btns = ttk.Frame(info_frame)
-        btns.grid(row=8, column=0, sticky='e', pady=(10,0))
-        ttk.Button(btns, text='Làm mới', command=lambda: self._refresh_links_window(win, project_dir, links_path, names_path)).pack(side='left', padx=(0,6))
-        ttk.Button(btns, text='Đóng', command=win.destroy).pack(side='left')
-
-    def _compute_links_stats(self, links_path: str):
-        groups = 0
-        total_links = 0
-        if not os.path.isfile(links_path):
-            return groups, total_links
-        try:
-            with open(links_path, 'r', encoding='utf-8', errors='ignore') as f:
-                for line in f:
-                    s = line.strip()
-                    if not s:
-                        continue
-                    if s.startswith('http://') or s.startswith('https://'):
-                        total_links += 1
-                    else:
-                        groups += 1
-        except Exception:
-            pass
-        return groups, total_links
-
-    # --------------------------------------------------------------
-    # Config persistence helpers
-    # --------------------------------------------------------------
+    # =================================================================
+    # Config persistence
+    # =================================================================
     def _save_config(self):
         try:
             cfg = {
                 'version': self.version_var.get().strip(),
                 'mode': self.mode_var.get().strip(),
+                'download_type': self.download_type_var.get().strip(),
                 'videos_per_keyword': self.videos_per_keyword_var.get().strip(),
                 'images_per_keyword': self.images_per_keyword_var.get().strip(),
                 'max_duration': self.max_duration_var.get().strip(),
                 'min_duration': self.min_duration_var.get().strip(),
                 'regen_links': bool(self.regen_links_var.get()),
-                'batch_projects': list(self.batch_projects) if isinstance(self.batch_projects, list) else [],
-                'premier_projects': list(self.premier_projects) if isinstance(self.premier_projects, list) else [],
+                'batch_projects': list(self.batch_projects)
+                if isinstance(self.batch_projects, list)
+                else [],
+                'premier_projects': list(self.premier_projects)
+                if isinstance(self.premier_projects, list)
+                else [],
             }
             os.makedirs(os.path.dirname(CONFIG_PATH), exist_ok=True)
             with open(CONFIG_PATH, 'w', encoding='utf-8') as f:
                 json.dump(cfg, f, ensure_ascii=False, indent=2)
         except Exception:
-            # Non-fatal: ignore write errors, optionally log
             try:
                 self.log("CẢNH BÁO: Không ghi được config.")
             except Exception:
@@ -794,12 +1306,13 @@ class AutoToolGUI(tk.Tk):
             except Exception:
                 pass
             return
-        # Apply values to variables (ignore missing keys)
         try:
             if 'version' in cfg:
                 self.version_var.set(str(cfg['version']))
             if 'mode' in cfg:
                 self.mode_var.set(str(cfg['mode']))
+            if 'download_type' in cfg:
+                self.download_type_var.set(str(cfg['download_type']))
             if 'videos_per_keyword' in cfg:
                 self.videos_per_keyword_var.set(str(cfg['videos_per_keyword']))
             if 'images_per_keyword' in cfg:
@@ -841,7 +1354,6 @@ class AutoToolGUI(tk.Tk):
                 pass
 
     def _on_var_change(self, *args):
-        # Skip saving while loading initial config
         if getattr(self, '_loading_config', False):
             return
         try:
@@ -850,10 +1362,10 @@ class AutoToolGUI(tk.Tk):
             pass
 
     def _bind_config_traces(self):
-        # Bind variable write events to auto-save config
         vars_to_bind = [
             self.version_var,
             self.mode_var,
+            self.download_type_var,
             self.videos_per_keyword_var,
             self.images_per_keyword_var,
             self.max_duration_var,
@@ -865,17 +1377,19 @@ class AutoToolGUI(tk.Tk):
                 v.trace_add('write', self._on_var_change)
             except Exception:
                 try:
-                    v.trace('w', self._on_var_change)  # Tk < 8.6 fallback
+                    v.trace('w', self._on_var_change)
                 except Exception:
                     pass
 
-# ---------------------------------------------------------------------------
-# Entrypoint
-# ---------------------------------------------------------------------------
 
-def main():  # pragma: no cover - manual GUI run
+# =====================================================================
+# Entrypoint
+# =====================================================================
+
+def main():
     app = AutoToolGUI()
     app.mainloop()
 
-if __name__ == "__main__":  # pragma: no cover
+
+if __name__ == "__main__":
     main()

@@ -108,6 +108,7 @@ def get_client() -> OpenAI:
     => Tất cả đều đọc từ biến môi trường, mà biến này đã load từ .env ở trên.
     Không dùng data/openai_key.txt nữa.
     """
+    
     key_candidates = [
         "OPENAI_API_KEY_TIMELINE",
         "OPENAI_API_KEY_TL",
@@ -160,12 +161,47 @@ def save_keywords(project_slug: str, keywords: List[str]) -> None:
             f.write(kw.strip() + "\n")
 
 
+def normalize_character(raw: str) -> str:
+    """
+    Chuẩn hoá tên nhân vật cho phù hợp với tên bin:
+    - Cắt phần sau dấu phẩy/gạch nếu có
+    - Lấy từ đầu tiên có chữ cái
+    - Viết hoa chữ cái đầu: 'naruto uzumaki' -> 'Naruto'
+    """
+    if not raw:
+        return ""
+    s = str(raw).strip()
+
+    # Cắt theo các separator phổ biến
+    for sep in [",", "-", "|", "/", "–", "_"]:
+        if sep in s:
+            s = s.split(sep)[0].strip()
+    if not s:
+        return ""
+
+    # Tách từ, chọn từ đầu tiên có chữ cái
+    tokens = s.split()
+    chosen = ""
+    for tok in tokens:
+        if any(c.isalpha() for c in tok):
+            chosen = tok
+            break
+    if not chosen:
+        return ""
+
+    chosen = chosen.strip()
+    # Lower hết rồi capitalize
+    chosen = chosen.lower()
+    return chosen[:1].upper() + chosen[1:]
+
+
 # =============================
-# AI: TOPIC -> KEYWORDS
+# AI: TOPIC -> KEYWORDS (giữ lại nhưng KHÔNG dùng trong main)
 # =============================
 
 def ai_expand_topic_to_keywords(client: OpenAI, topic: str, n_keywords: int = 25) -> List[str]:
     """
+    (Hiện tại KHÔNG dùng trong main, chỉ giữ lại nếu sau này muốn xài riêng.)
     Dùng AI để biến 1 TOPIC thành nhiều KEYWORD liên quan.
     """
     system_prompt = "You are a helpful assistant that outputs ONLY JSON. No explanation."
@@ -176,6 +212,9 @@ Tôi có một chủ đề video như sau:
 
 Hãy nghĩ ra một danh sách khoảng {n_keywords} keyword/ngữ cảnh NGẮN GỌN, tiếng Việt,
 liên quan chặt chẽ đến chủ đề này, có thể dùng để tìm clip hoặc hình ảnh minh họa.
+
+- Nếu chủ đề chứa tên nhân vật (vd: Naruto, Sasuke, Luffy...), hãy cố gắng để tên nhân vật
+  xuất hiện rõ ràng trong mỗi keyword, thường là từ đầu tiên (ví dụ: "Naruto thời thơ ấu", "Naruto luyện tập"...).
 
 Trả về JSON đúng cấu trúc:
 {{
@@ -230,7 +269,9 @@ Mỗi scene có cấu trúc JSON như sau:
 {{
   "scene_index": number,          // 1,2,3,...
   "keyword": string,              // keyword chính, phải nằm trong list tôi gửi
-  "duration_sec": number,         // độ dài đoạn này, giây (6-12s tuỳ nội dung)
+  "character": string,            // tên nhân vật chính của scene, ví dụ: "Naruto", "Sasuke", "Sakura".
+                                  // Nếu keyword nói rõ một nhân vật, hãy dùng đúng tên đó (viết hoa chữ cái đầu).
+  "duration_sec": number,         // độ dài đoạn này, giây (khoảng 6–12s tuỳ nội dung)
   "search_query": string,         // câu search YouTube/stock image
   "voiceover": string             // nội dung voiceover/caption
 }}
@@ -243,6 +284,8 @@ Trả về JSON với cấu trúc:
 Yêu cầu:
 - Tổng thời lượng khoảng 180–240 giây (3–4 phút).
 - Nội dung mạch lạc, dễ hiểu.
+- Nếu video xoay quanh 1 nhân vật (vd: Naruto), hầu hết các scene nên có "character": "Naruto".
+- Nếu keyword nhắc tới nhiều nhân vật, hãy chọn 1 nhân vật chính nhất cho field "character".
 - "search_query" nên chi tiết hơn keyword (thêm mô tả, bối cảnh...).
 - CHỈ TRẢ VỀ JSON, KHÔNG THÊM TEXT NÀO KHÁC.
     """.strip()
@@ -274,12 +317,25 @@ def call_ai_for_timeline(client: OpenAI, keywords: List[str]) -> List[dict]:
         raise RuntimeError("JSON không có trường 'scenes' dạng list")
 
     norm_scenes: List[dict] = []
+    chars_seen = set()
+
     for scene in scenes:
         try:
+            raw_char = scene.get("character", "")
+            # Nếu AI không trả hoặc trả linh tinh -> fallback từ keyword
+            if not raw_char:
+                raw_char = scene.get("keyword", "")
+
+            char_norm = normalize_character(raw_char)
+
+            if char_norm:
+                chars_seen.add(char_norm)
+
             norm_scenes.append(
                 {
                     "scene_index": int(scene.get("scene_index")),
                     "keyword": str(scene.get("keyword", "")).strip(),
+                    "character": char_norm,
                     "duration_sec": float(scene.get("duration_sec", 0)) or 0,
                     "search_query": str(scene.get("search_query", "")).strip(),
                     "voiceover": str(scene.get("voiceover", "")).strip(),
@@ -287,13 +343,17 @@ def call_ai_for_timeline(client: OpenAI, keywords: List[str]) -> List[dict]:
             )
         except Exception as e:
             print("Bỏ qua scene lỗi:", scene, "->", e)
+
+    print(f"[DEBUG] Character xuất hiện trong timeline: {sorted(chars_seen)}")
     return norm_scenes
 
 
 def save_csv(project_slug: str, scenes: List[dict]) -> Path:
     """
-    Ghi ra timeline_export_merged.csv.
-    Nếu cutAndPush.jsx dùng header khác, sửa fieldnames cho khớp.
+    Ghi ra timeline_export_merged.csv với header:
+    scene_index,keyword,character,duration_sec,search_query,voiceover
+
+    cutAndPush.jsx đã được chỉnh để đọc cột 'character' và dùng làm binName.
     """
     out_path = DATA_DIR / project_slug / "timeline_export_merged.csv"
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -301,6 +361,7 @@ def save_csv(project_slug: str, scenes: List[dict]) -> Path:
     fieldnames = [
         "scene_index",
         "keyword",
+        "character",
         "duration_sec",
         "search_query",
         "voiceover",
@@ -320,7 +381,7 @@ def save_csv(project_slug: str, scenes: List[dict]) -> Path:
 # =============================
 
 def main():
-    print("=== GEN KEYWORDS + TIMELINE (AI mode) ===")
+    print("=== GEN TIMELINE TỪ KEYWORD CŨ (KHÔNG SINH KEYWORD MỚI) ===")
     project_slug = get_current_project_slug()
     print(f"- project_slug: {project_slug}")
 
@@ -329,22 +390,23 @@ def main():
     keywords = load_keywords(project_slug)
     print(f"- Đọc được {len(keywords)} dòng từ list_name.txt")
 
-    # Nếu <= 1 dòng => coi là TOPIC -> nhờ AI expand
-    if len(keywords) <= 1:
-        if len(keywords) == 1:
-            topic = keywords[0]
-            print(f"- Dùng dòng duy nhất trong list_name.txt làm chủ đề: {topic}")
-        else:
-            topic = project_slug
-            print(f"- list_name.txt rỗng, dùng project_slug làm chủ đề: {topic}")
+    # ✅ YÊU CẦU CỦA BẠN: KHÔNG GEN KEYWORD MỚI
+    # -> Bắt buộc phải có ít nhất 1 keyword trong list_name.txt
+    if not keywords:
+        raise RuntimeError(
+            "list_name.txt đang TRỐNG.\n"
+            "Hãy mở file:\n"
+            f"  {DATA_DIR / project_slug / 'list_name.txt'}\n"
+            "và điền sẵn danh sách keyword (mỗi dòng 1 keyword), "
+            "sau đó chạy lại script."
+        )
 
-        new_keywords = ai_expand_topic_to_keywords(client, topic, n_keywords=25)
-        print(f"- AI sinh ra {len(new_keywords)} keyword từ chủ đề.")
-        save_keywords(project_slug, new_keywords)
-        keywords = new_keywords
-    else:
-        print("- Đã có sẵn danh sách keyword, bỏ qua bước sinh keyword từ topic.")
+    print("- Dùng NGUYÊN danh sách keyword có sẵn trong list_name.txt, không gọi AI sinh keyword mới.")
+    print("  -> Keywords:")
+    for i, kw in enumerate(keywords, start=1):
+        print(f"    {i:02d}. {kw}")
 
+    # Dùng chính list keyword này để gọi AI sinh TIMELINE
     scenes = call_ai_for_timeline(client, keywords)
     print(f"- AI trả về {len(scenes)} scene")
 

@@ -138,7 +138,8 @@ function splitCSVLine(line){
 }
 
 // Parser CSV: hỗ trợ cả dạng getTimeline (startSeconds/endSeconds)
-// và dạng AI (scene_index,keyword,duration_sec,search_query,voiceover)
+// và dạng AI (scene_index,keyword,character,duration_sec,search_query,voiceover)
+// + mở rộng cho Genmini: src_start, src_end, bin_name, video_index
 function readTimelineCSVFile(filePath){
     try {
         var f = new File(filePath);
@@ -187,18 +188,25 @@ function readTimelineCSVFile(filePath){
             return -1;
         }
 
-        // cột thời gian
-        var idxStart = findIdx(['startSeconds','start_seconds','start_sec','start']);
-        var idxEnd   = findIdx(['endSeconds','end_seconds','end_sec','end']);
-        var idxDur   = findIdx(['duration_sec','durationSeconds','duration','duration_s']);
+        // cột thời gian (timeline)
+        var idxStart = findIdx(['startseconds','start_seconds','start_sec','start']);
+        var idxEnd   = findIdx(['endseconds','end_seconds','end_sec','end']);
+        var idxDur   = findIdx(['duration_sec','durationseconds','duration','duration_s']);
 
-        // cột tên/bin & text
+        // cột tên/bin & text & character
         var idxName  = findIdx(['name','keyword','bin','bin_name']);
-        var idxText  = findIdx(['textContent','voiceover','text','subtitle']);
+        var idxText  = findIdx(['textcontent','voiceover','text','subtitle']);
+        var idxChar  = findIdx(['character','char','person','speaker']);
+
+        // Genmini-specific: src_start, src_end, explicit bin_name, video_index
+        var idxSrcStart = findIdx(['src_start','srcstart','source_start','video_start_sec','segment_src_start']);
+        var idxSrcEnd   = findIdx(['src_end','srcend','source_end','video_end_sec','segment_src_end']);
+        var idxBinName2 = findIdx(['bin_name','bin','binname']);
+        var idxVideoIdx = findIdx(['video_index','videoidx','video_idx','clip_index']);
 
         var mode = '';
         if (idxStart >= 0 && idxEnd >= 0) {
-            mode = 'start_end';      // file có sẵn startSeconds/endSeconds
+            mode = 'start_end';      // file có sẵn startSeconds/endSeconds (timeline)
         } else if (idxDur >= 0) {
             mode = 'duration_only';  // chỉ có duration_sec -> tự tính start/end nối tiếp
         } else {
@@ -246,12 +254,44 @@ function readTimelineCSVFile(filePath){
                 txt = parts[idxText];
             }
 
+            var chName = '';
+            if (idxChar >= 0 && idxChar < parts.length) {
+                chName = parts[idxChar];
+            }
+
+            // Genmini fields
+            var srcStart = null;
+            var srcEnd   = null;
+            var binExtra = '';
+            var videoIdx = -1;
+
+            if (idxSrcStart >= 0 && idxSrcStart < parts.length) {
+                var tmpS = parseFloat(parts[idxSrcStart]);
+                if (!isNaN(tmpS) && tmpS >= 0) srcStart = tmpS;
+            }
+            if (idxSrcEnd >= 0 && idxSrcEnd < parts.length) {
+                var tmpE = parseFloat(parts[idxSrcEnd]);
+                if (!isNaN(tmpE) && tmpE > 0) srcEnd = tmpE;
+            }
+            if (idxBinName2 >= 0 && idxBinName2 < parts.length) {
+                binExtra = parts[idxBinName2];
+            }
+            if (idxVideoIdx >= 0 && idxVideoIdx < parts.length) {
+                var tmpIdx = parseInt(parts[idxVideoIdx], 10);
+                if (!isNaN(tmpIdx) && tmpIdx >= 0) videoIdx = tmpIdx;
+            }
+
             out.push({
                 index: out.length,
                 startSeconds: s,
                 endSeconds: e,
                 name: nm,
-                textContent: txt
+                textContent: txt,
+                character: chName,
+                binName: binExtra,
+                srcStart: srcStart,
+                srcEnd: srcEnd,
+                videoIndex: videoIdx
             });
         }
 
@@ -276,8 +316,7 @@ var g_sequence = null;
 // Lưu lại các khoảng (in,out) đã dùng ...
 var _USED_INTERVALS = {};
 
-
-// Cấu hình thuật toán tránh trùng
+// Cấu hình thuật toán tránh trùng (chỉ dùng cho chế độ random cũ)
 var NON_OVERLAP_CONFIG = {
     maxRandomTries: 12,        // số lần thử random khác trước khi quét gap
     minSeparationFactor: 0.35, // yêu cầu đoạn mới không overlap hơn (factor * finalDuration)
@@ -336,7 +375,8 @@ function _pickNonOverlappingStart(srcInSec, srcOutSec, finalDuration, key){
     var attempts = NON_OVERLAP_CONFIG.maxRandomTries;
     var minAllowedOverlap = NON_OVERLAP_CONFIG.minSeparationFactor * finalDuration;
 
-    for (var t=0;t<attempts;t++){
+    var t;
+    for (t=0;t<attempts;t++){
         var cand = srcInSec + Math.random() * (maxStart - srcInSec);
         var candEnd = cand + finalDuration;
         if (!_hasHeavyOverlap(cand, candEnd, list, minAllowedOverlap)) {
@@ -380,6 +420,8 @@ function _pickNonOverlappingStart(srcInSec, srcOutSec, finalDuration, key){
 }
 
 // =================== Time helpers ===================
+var TICKS_PER_SECOND = 254016000000.0; // dùng chung cho seconds <-> ticks
+
 // Premiere trả về Time object có .seconds; ta luôn làm việc bằng giây
 function timeObjToSeconds(t){
     try {
@@ -389,16 +431,20 @@ function timeObjToSeconds(t){
         }
         // fallback nếu có ticks (hiếm khi cần)
         if (typeof t.ticks === 'number') {
-            var TICKS_PER_SECOND = 254016000000.0;
             return t.ticks / TICKS_PER_SECOND;
         }
     } catch(e){}
     return 0;
 }
 
-
 // ======= CONFIG =======
 var DEFAULT_SEQUENCE_NAME = "Main";
+
+// Nếu muốn chỉ dùng 1 nhân vật duy nhất cho cả timeline (vd "Naruto"),
+// thì set:
+//    var ONLY_CHARACTER = "Naruto";
+// Để chuỗi rỗng "" nghĩa là dùng tất cả character trong CSV.
+var ONLY_CHARACTER = "";
 
 // Cho phép runAll.jsx override tên sequence
 // (trong runAll.jsx: RUNALL_SEQUENCE_NAME = "Main"; trước khi eval cutAndPush.jsx)
@@ -547,7 +593,41 @@ function initializeProjectAndSequence() {
     return true;
 }
 
+// =================== MARKER helpers ===================
+// Thêm marker để chú thích đoạn này thuộc keyword / character nào
+function addKeywordMarkerForRange(seq, startSeconds, endSeconds, keyword, character) {
+    try {
+        if (!seq || !seq.markers) {
+            $.writeln('[addKeywordMarkerForRange] No sequence or markers');
+            return;
+        }
+        var t = startSeconds;
+        if (t < 0) t = 0;
 
+        var markers = seq.markers;
+        var m = markers.createMarker(t); // time tính bằng giây
+
+        var kw = keyword ? String(keyword) : '';
+        var ch = character ? String(character) : '';
+
+        var title = '';
+        if (kw) title += kw;
+        if (ch) title += (title ? ' [' + ch + ']' : '[' + ch + ']');
+        if (!title) title = 'Scene at ' + t.toFixed(2) + 's';
+
+        m.name = title;
+        m.comments = 'keyword: ' + (kw || '(none)') + ' | character: ' + (ch || '(none)');
+
+        if (endSeconds > startSeconds) {
+            var endTicks = endSeconds * TICKS_PER_SECOND;
+            m.end = endTicks;
+        }
+
+        $.writeln('[addKeywordMarkerForRange] Marker created at ' + t.toFixed(3) + 's with title: ' + title);
+    } catch (e) {
+        $.writeln('[addKeywordMarkerForRange] Error: ' + e);
+    }
+}
 
 // hàm gen thời gian duration ngẫu nhiên trong khoảng min và max (đơn vị giây)
 function getRandomDuration(minSeconds, maxSeconds) {
@@ -599,9 +679,23 @@ function addVideoTrackOnTop() {
     }
 }
 
-// hàm thực hiện lấy 1 video item từ project theo tên bin, chọn ngẫu nhiên 1 video trong bin đó,
-// sau đó thực hiện cắt và đẩy vào timeline trong v track được chọn
-function cutAndPushClipToTimeline(binName, idxBinVd, startTime, endTime, sequence, targetVideoTrack) {
+// =============================================================
+// CUT VÀ PUSH CLIP VÀO TIMELINE
+// =============================================================
+// THAY ĐỔI QUAN TRỌNG:
+// - Nếu có srcStartOverride/srcEndOverride (Genmini) → dùng chính xác đoạn đó.
+// - Nếu không có → giữ logic random cũ (getRandomDuration + _pickNonOverlappingStart).
+// =============================================================
+function cutAndPushClipToTimeline(
+    binName,
+    idxBinVd,
+    startTime,
+    endTime,
+    sequence,
+    targetVideoTrack,
+    srcStartOverride,
+    srcEndOverride
+) {
     if (!project || !sequence || !targetVideoTrack) {
         $.writeln('[cutAndPushClipToTimeline] project, sequence, or targetVideoTrack is null or undefined');
         return startTime;
@@ -611,10 +705,11 @@ function cutAndPushClipToTimeline(binName, idxBinVd, startTime, endTime, sequenc
         $.writeln('[cutAndPushClipToTimeline] project.rootItem is null or undefined');
         return startTime;
     }
-    
+
     // Tìm bin theo tên
     var targetBin = null;
-    for (var i = 0; i < rootItem.children.numItems; i++) {
+    var i;
+    for (i = 0; i < rootItem.children.numItems; i++) {
         var child = rootItem.children[i];
         if (child && child.type === 2 && child.name === binName) { // 2 = Bin
             targetBin = child;
@@ -638,18 +733,12 @@ function cutAndPushClipToTimeline(binName, idxBinVd, startTime, endTime, sequenc
     }
     $.writeln('[cutAndPushClipToTimeline] Found clip: ' + videoItem.name + ' in bin: ' + binName);
 
-    // Kiểm tra thời gian startTime và endTime
-    if (startTime < 0 || endTime <= startTime) {
+    // Kiểm tra thời gian slot trên timeline
+    var inputDuration = endTime - startTime;
+    if (startTime < 0 || inputDuration <= 0) {
         $.writeln('[cutAndPushClipToTimeline] Invalid startTime or endTime');
         return startTime;
     }
-
-    // Tạo đoạn clip mới từ videoItem
-    var inputDuration = endTime - startTime; // tổng thời lượng cần lấp trên timeline
-    var randomDuration = getRandomDuration(2, 4); // độ dài đoạn lấy
-    var finalDuration;
-    if (inputDuration <= randomDuration) finalDuration = inputDuration; // đoạn quá ngắn, lấy hết
-    else finalDuration = randomDuration; // giữ phần lớn thời gian, trừ 1 đoạn ngẫu nhiên
 
     // Lấy thời gian in/out gốc của clip nguồn (giây)
     var srcInSec = timeObjToSeconds(videoItem.getInPoint());
@@ -660,13 +749,59 @@ function cutAndPushClipToTimeline(binName, idxBinVd, startTime, endTime, sequenc
         return startTime;
     }
 
-    // Phạm vi còn lại để chọn vị trí bắt đầu ngẫu nhiên bên trong clip nguồn
-    var key = _intervalKey(videoItem, srcPlayable);
-    var newInSec = _pickNonOverlappingStart(srcInSec, srcOutSec, finalDuration, key);
-    var newOutSec = newInSec + finalDuration;
-    if (newOutSec > srcOutSec) newOutSec = srcOutSec; // đảm bảo không vượt quá
+    var hasOverride = false;
+    var newInSec, newOutSec, finalDuration;
 
-    // Gọi createSubClip với ĐƠN VỊ GIÂY (seconds) – CHUẨN Premiere
+    // ==================================================
+    // CASE 1: Có dữ liệu Genmini -> dùng chính xác [src_start, src_end]
+    // ==================================================
+    if (typeof srcStartOverride === 'number' &&
+        typeof srcEndOverride === 'number' &&
+        srcEndOverride > srcStartOverride) {
+
+        hasOverride = true;
+        newInSec = srcStartOverride;
+        newOutSec = srcEndOverride;
+
+        // Clamp vào khoảng playable của clip
+        if (newInSec < srcInSec) newInSec = srcInSec;
+        if (newOutSec > srcOutSec) newOutSec = srcOutSec;
+
+        finalDuration = newOutSec - newInSec;
+        if (finalDuration <= 0) {
+            $.writeln('[cutAndPushClipToTimeline] Override range invalid after clamp, skip.');
+            return startTime;
+        }
+
+        $.writeln('[cutAndPushClipToTimeline] Using Genmini segment [' +
+                  newInSec.toFixed(3) + 's -> ' + newOutSec.toFixed(3) +
+                  's], duration=' + finalDuration.toFixed(3) + 's');
+    }
+    // ==================================================
+    // CASE 2: Không có override -> random như cũ
+    // ==================================================
+    if (!hasOverride) {
+        var randomDuration = getRandomDuration(2, 4); // độ dài đoạn lấy
+        if (inputDuration <= randomDuration) finalDuration = inputDuration;
+        else finalDuration = randomDuration;
+
+        var key = _intervalKey(videoItem, srcPlayable);
+        newInSec = _pickNonOverlappingStart(srcInSec, srcOutSec, finalDuration, key);
+        newOutSec = newInSec + finalDuration;
+        if (newOutSec > srcOutSec) newOutSec = srcOutSec; // đảm bảo không vượt quá
+
+        finalDuration = newOutSec - newInSec;
+        if (finalDuration <= 0) {
+            $.writeln('[cutAndPushClipToTimeline] Random segment invalid, skip.');
+            return startTime;
+        }
+
+        $.writeln('[cutAndPushClipToTimeline] RANDOM segment [' +
+                  newInSec.toFixed(3) + 's -> ' + newOutSec.toFixed(3) +
+                  's], duration=' + finalDuration.toFixed(3) + 's, key=' + key);
+    }
+
+    // Tạo subclip từ videoItem
     var newClip = null;
     try {
         newClip = videoItem.createSubClip(
@@ -678,7 +813,7 @@ function cutAndPushClipToTimeline(binName, idxBinVd, startTime, endTime, sequenc
             1    // takeAudio (nếu không muốn audio thì để 0)
         );
     } catch(eCreate) {
-        $.writeln('[cutAndPushClipToTimeline] createSubClip failed (seconds): ' + eCreate);
+        $.writeln('[cutAndPushClipToTimeline] createSubClip failed: ' + eCreate);
         return startTime;
     }
 
@@ -686,7 +821,10 @@ function cutAndPushClipToTimeline(binName, idxBinVd, startTime, endTime, sequenc
         $.writeln('[cutAndPushClipToTimeline] Failed to create subclip from: ' + videoItem.name);
         return startTime;
     }
-    $.writeln('[cutAndPushClipToTimeline] Created subclip: ' + newClip.name + ' from ' + newInSec.toFixed(3) + 's to ' + newOutSec.toFixed(3) + 's (duration: ' + finalDuration.toFixed(3) + 's) key=' + key);
+    $.writeln('[cutAndPushClipToTimeline] Created subclip: ' +
+              newClip.name + ' from ' + newInSec.toFixed(3) +
+              's to ' + newOutSec.toFixed(3) + 's (duration: ' +
+              finalDuration.toFixed(3) + 's)');
 
     // Đẩy đoạn clip mới vào timeline tại vị trí startTime (seconds)
     try {
@@ -697,7 +835,7 @@ function cutAndPushClipToTimeline(binName, idxBinVd, startTime, endTime, sequenc
 
     $.writeln('[cutAndPushClipToTimeline] Inserted subclip into timeline at ' + startTime + ' seconds on track.');
 
-    return startTime + finalDuration; // Trả về thời gian kết thúc của clip vừa chèn, để lần sau chèn tiếp từ đó
+    return startTime + finalDuration; // tiến thời gian trên timeline
 }
 
 // hàm test cut và push clip vào timeline (dev)
@@ -715,7 +853,7 @@ function testCutAndPush() {
 
     while (startTime < endTime) {
         var prev = startTime;
-        startTime = cutAndPushClipToTimeline("Amber_Portwood_tiktok", 0, startTime, endTime, sequence, targetVideoTrack);
+        startTime = cutAndPushClipToTimeline("Amber_Portwood_tiktok", 0, startTime, endTime, sequence, targetVideoTrack, null, null);
         if (startTime === null || startTime === prev) { // không tiến lên -> dừng tránh vòng lặp vô hạn
             $.writeln('[testCutAndPush] Stop loop (no progress)');
             break;
@@ -868,12 +1006,26 @@ function cutAndPushAllTimeline(tlFilePath) {
         var startSeconds = entry.startSeconds;
         var endSeconds = entry.endSeconds;
 
-        var nameField = entry.name || '';
+        var nameField   = entry.name || '';
         var textContent = entry.textContent || '';
+        var character   = entry.character || '';
 
-        // Ưu tiên binName từ name (keyword/bin), nếu không có thì mới fallback sang textContent
+        // OPTIONAL FILTER: chỉ giữ đúng một nhân vật duy nhất nếu ONLY_CHARACTER được set
+        if (ONLY_CHARACTER && character) {
+            var cf = String(character).replace(/\s+/g, ' ').toLowerCase();
+            var of = String(ONLY_CHARACTER).replace(/\s+/g, ' ').toLowerCase();
+            if (cf !== of) {
+                $.writeln('[cutAndPushAllTimeline] Skip line ' + (i+1) +
+                          ' vì character="' + character + '" khác ONLY_CHARACTER="' + ONLY_CHARACTER + '"');
+                continue;
+            }
+        }
+
+        // ƯU TIÊN character LÀM TÊN BIN, sau đó binName từ CSV, rồi name/text
         var binName = '';
-        if (entry.binName) {
+        if (character) {
+            binName = String(character);
+        } else if (entry.binName) {
             binName = String(entry.binName);
         } else if (nameField) {
             binName = String(nameField);
@@ -887,6 +1039,10 @@ function cutAndPushAllTimeline(tlFilePath) {
             continue;
         }
 
+        // Thêm marker chú thích keyword/character cho đoạn timeline này
+        addKeywordMarkerForRange(sequence, startSeconds, endSeconds, nameField, character);
+
+        // Tìm bin
         var binSize = 0;
         if (sizeBin.hasOwnProperty(binName)) {
             binSize = sizeBin[binName];
@@ -905,10 +1061,60 @@ function cutAndPushAllTimeline(tlFilePath) {
             binName = targetBin.name;
         }
 
+        // Genmini segment (srcStart/srcEnd) + videoIndex
+        var srcStartOverride = (entry.srcStart !== null && typeof entry.srcStart === 'number') ? entry.srcStart : null;
+        var srcEndOverride   = (entry.srcEnd   !== null && typeof entry.srcEnd   === 'number') ? entry.srcEnd   : null;
+        var hasFixedSegment = (srcStartOverride !== null && srcEndOverride !== null && srcEndOverride > srcStartOverride);
+
+        var videoIdx = (typeof entry.videoIndex === 'number' && entry.videoIndex >= 0)
+            ? entry.videoIndex
+            : -1;
+        if (videoIdx >= binSize) {
+            videoIdx = binSize - 1;
+        }
+
+        // ===========================================
+        // CASE A: Có segment Genmini -> dùng đúng 1 clip, đúng đoạn
+        // ===========================================
+        if (hasFixedSegment) {
+            if (videoIdx < 0) {
+                // nếu không có videoIndex, tạm dùng popIdxFromBin (random clip trong bin)
+                videoIdx = popIdxFromBin(binName, binSize);
+            }
+            $.writeln('[cutAndPushAllTimeline] [Genmini] line ' + (i+1) +
+                      ' bin=' + binName +
+                      ' videoIdx=' + videoIdx +
+                      ' src=[' + srcStartOverride + ' -> ' + srcEndOverride + ']');
+            cutAndPushClipToTimeline(
+                binName,
+                videoIdx,
+                startSeconds,
+                endSeconds,
+                sequence,
+                targetVideoTrack,
+                srcStartOverride,
+                srcEndOverride
+            );
+            processedCount++;
+            continue; // sang entry tiếp theo (mỗi dòng 1 segment)
+        }
+
+        // ===========================================
+        // CASE B: Không có segment Genmini -> giữ logic random cũ
+        // ===========================================
         while (true){
-            var idxInBin = popIdxFromBin(binName, binSize);
+            var idxInBin = (videoIdx >= 0) ? videoIdx : popIdxFromBin(binName, binSize);
             var prevStart = startSeconds;
-            startSeconds = cutAndPushClipToTimeline(binName, idxInBin, startSeconds, endSeconds, sequence, targetVideoTrack);
+            startSeconds = cutAndPushClipToTimeline(
+                binName,
+                idxInBin,
+                startSeconds,
+                endSeconds,
+                sequence,
+                targetVideoTrack,
+                null,
+                null
+            );
             if (startSeconds === null || startSeconds === prevStart) {
                 $.writeln('[cutAndPushAllTimeline] Stop loop for entry at line ' + (i+1) + ' (no progress)');
                 break;
@@ -940,4 +1146,3 @@ if (typeof RUNALL_TIMELINE_CSV_PATH !== 'undefined' && RUNALL_TIMELINE_CSV_PATH)
 }
 
 cutAndPushAllTimeline(csvDef);
-

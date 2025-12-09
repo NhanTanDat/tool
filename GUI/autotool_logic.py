@@ -339,29 +339,60 @@ class AutoToolLogic:
                 update_progress(100, "Lỗi khi tải ẢNH.")
                 return
 
-        # 4. AI GENERATE TIMELINE (chỉ khi có VIDEO)
+        # 4. GENMINI TIMELINE (chỉ khi có VIDEO)
         if timeline_needed and video_done:
             try:
-                log("Bắt đầu sinh timeline bằng AI...")
-                from core.ai.auto_cut_pipeline import auto_generate_timeline
-                update_progress(95, "Đang AI tự sinh timeline...")
-                # Chỉ chạy timeline SAU KHI tải xong (VIDEO + ẢNH nếu both)
-                if mode_l == 'both':
-                    if not image_done:
-                        log("CẢNH BÁO: Chế độ both nhưng ảnh chưa tải xong. Bỏ qua sinh timeline.")
-                        update_progress(100, "Bỏ qua sinh timeline do thiếu ảnh.")
-                    else:
-                        auto_generate_timeline(parent, safe_project)
-                        log("🎬 AI đã tự sinh timeline (video + ảnh)!")
-                        update_progress(100, "Hoàn tất! Timeline đã được tạo.")
+                try:
+                    from core.ai.genmini_analyze import (
+                        run_genmini_for_project,
+                        build_timeline_csv_from_segments,
+                    )
+                except Exception as e:
+                    log(f"LỖI: Không import được core.ai.genmini_analyze: {e}")
+                    update_progress(100, "Hoàn tất (lỗi module Genmini).")
+                    return
+
+                log("Bắt đầu phân tích video bằng Genmini để sinh timeline...")
+
+                # Giữ behaviour cũ: mode both yêu cầu ảnh ok (nếu bạn muốn bỏ điều kiện này thì xoá block if này)
+                if mode_l == 'both' and not image_done:
+                    log("CẢNH BÁO: Chế độ both nhưng ảnh chưa tải xong. Bỏ qua sinh timeline.")
+                    update_progress(100, "Bỏ qua sinh timeline do thiếu ảnh.")
                 else:
-                    # mode video: chỉ cần video
-                    auto_generate_timeline(parent, safe_project)
-                    log("🎬 AI đã tự sinh timeline!")
-                    update_progress(100, "Hoàn tất! Timeline đã được tạo.")
+                    dl_links_path = links_txt
+                    if not os.path.isfile(dl_links_path):
+                        log(f"LỖI: Không tìm thấy dl_links.txt để Genmini phân tích: {dl_links_path}")
+                        update_progress(100, "Hoàn tất (thiếu dl_links.txt).")
+                        return
+
+                    segments_json = os.path.join(data_project_dir, "segments_genmini.json")
+                    timeline_csv = os.path.join(data_project_dir, "timeline_export_merged.csv")
+
+                    update_progress(92, "Genmini đang phân tích phân đoạn nhân vật...")
+                    num_items = run_genmini_for_project(
+                        dl_links_path=dl_links_path,
+                        segments_json_path=segments_json,
+                        max_segments_per_video=8,
+                    )
+                    log(f"[Genmini] Đã phân tích xong {num_items} video có segment.")
+
+                    if num_items == 0:
+                        log("[Genmini] Không có segment nào được trả về. Bỏ qua sinh timeline.")
+                        update_progress(100, "Hoàn tất (Genmini không trả segment).")
+                        return
+
+                    update_progress(97, "Đang sinh file timeline cho Premiere...")
+                    num_scenes = build_timeline_csv_from_segments(
+                        segments_json_path=segments_json,
+                        timeline_csv_path=timeline_csv,
+                        only_character=None,
+                    )
+                    log(f"[Genmini] Đã sinh {num_scenes} đoạn vào: {timeline_csv}")
+                    log("🎬 Timeline đã được tạo, Premiere sẽ cắt đúng theo phân đoạn Genmini.")
+                    update_progress(100, "Hoàn tất! Timeline Genmini đã được tạo.")
             except Exception as e:
-                log(f"LỖI khi chạy AI timeline: {e}")
-                update_progress(100, "Hoàn tất (lỗi khi sinh timeline).")
+                log(f"LỖI khi chạy Genmini timeline: {e}")
+                update_progress(100, "Hoàn tất (lỗi khi sinh timeline Genmini).")
                 return
         else:
             if mode_l == 'image':
@@ -422,3 +453,4 @@ class AutoToolLogic:
             )
         except Exception as e:
             log(f"LỖI khi tải ảnh: {e}")
+    

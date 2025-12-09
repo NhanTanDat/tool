@@ -1,4 +1,4 @@
-project_slug=naruto
-data_folder=C:/Users/Tam/Desktop/aThanh/autotool/data/naruto
-project_path=C:/Users/Tam/Documents/Adobe/Premiere Pro/22.0/naruto/naruto.prproj
-resource_dir=C:/Users/Tam/Documents/Adobe/Premiere Pro/22.0/naruto/resource
+project_slug=doremon
+data_folder=C:/Users/Tam/Desktop/aThanh/autotool/data/doremon
+project_path=C:/Users/Tam/Documents/Adobe/Premiere Pro/22.0/doremon.prproj
+resource_dir=C:/Users/Tam/Documents/Adobe/Premiere Pro/22.0/resource

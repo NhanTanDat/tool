@@ -3,18 +3,36 @@ down_by_yt.py
 -----------------------------------
 Dùng yt-dlp để tải VIDEO/AUDIO.
 
-Trường hợp thường dùng với AutoTool:
-    - type = "mp4"  -> TẢI VIDEO H.264 + MP4 (ưu tiên có cả audio, Premiere ăn chắc).
-    - type = "mp3"  -> nếu có ffmpeg thì convert sang mp3, nếu không thì chỉ tải audio gốc.
+- mp4: ưu tiên MP4 H.264 (avc1) + audio m4a (merge mp4) cho Premiere
+- mp3: nếu có ffmpeg thì convert mp3, nếu không thì tải audio gốc
 
-YÊU CẦU:
-    py -3.12 -m pip install yt-dlp
-    (khuyến nghị cài thêm ffmpeg và add vào PATH)
+✅ MODE (theo yêu cầu):
+- KHÔNG check subtitles
+- KHÔNG filter link
+- CHỈ download đúng thứ tự link trong file
 """
 
 import os
+import re
 import shutil
-from typing import Dict, List
+from typing import Dict, List, Optional, Tuple
+
+# ---------------------------------------------------------------------------
+# CONFIG: đặt tên file theo index
+# ---------------------------------------------------------------------------
+INDEX_START = 0     # 0-based để khớp video_index trong CSV
+INDEX_PAD = 4       # 0000, 0001...
+
+# Cookie (nếu cần)
+COOKIES_FILE = os.environ.get("YTDLP_COOKIES_FILE", "").strip()
+
+# Ép client để giảm warning SABR (tuỳ chọn)
+YTDLP_PLAYER_CLIENT = (os.environ.get("YTDLP_PLAYER_CLIENT", "android") or "android").strip().lower()
+
+# Retry tuning (tuỳ chọn)
+YTDLP_RETRIES = int(os.environ.get("YTDLP_RETRIES", "10"))
+YTDLP_SLEEP_INTERVAL = float(os.environ.get("YTDLP_SLEEP_INTERVAL", "2"))
+YTDLP_MAX_SLEEP_INTERVAL = float(os.environ.get("YTDLP_MAX_SLEEP_INTERVAL", "6"))
 
 # ---------------------------------------------------------------------------
 # Detect ffmpeg
@@ -23,14 +41,21 @@ FFMPEG_PATH = shutil.which("ffmpeg")
 HAS_FFMPEG = FFMPEG_PATH is not None
 
 # ---------------------------------------------------------------------------
-# Helper thư mục
+# Helper: sanitize folder name (Windows-safe)
 # ---------------------------------------------------------------------------
+def sanitize_folder_name(name: str) -> str:
+    if not isinstance(name, str):
+        name = str(name)
+    name = name.strip()
+    name = re.sub(r"\s+", "_", name)
+    name = "".join(ch for ch in name if ch not in '<>:"/\\|?*')
+    name = name.rstrip(" .")
+    return name or "group"
+
 
 def ensure_folder(parent: str, name: str) -> str:
-    """
-    Tạo thư mục con parent/name nếu chưa có, và LUÔN trả về đường dẫn đó.
-    """
-    path = os.path.join(parent, name)
+    safe = sanitize_folder_name(name)
+    path = os.path.join(parent, safe)
     os.makedirs(path, exist_ok=True)
     return path
 
@@ -44,7 +69,7 @@ except ImportError:
     raise ImportError(
         "\nThiếu thư viện yt-dlp!\n"
         "Cài bằng lệnh:\n\n"
-        "    py -3.12 -m pip install yt-dlp\n"
+        "    py -3.12 -m pip install -U yt-dlp\n"
     )
 
 
@@ -53,7 +78,7 @@ except ImportError:
 # ---------------------------------------------------------------------------
 def parse_links_from_txt(file_path: str) -> Dict[str, List[str]]:
     groups: Dict[str, List[str]] = {}
-    current = None
+    current: Optional[str] = None
     synthetic_index = 1
 
     if not os.path.isfile(file_path):
@@ -81,7 +106,7 @@ def parse_links_from_txt(file_path: str) -> Dict[str, List[str]]:
             else:
                 name = line
 
-            safe_name = "_".join(name.split())  # thay khoảng trắng bằng _
+            safe_name = sanitize_folder_name(name)
             current = safe_name
             groups.setdefault(current, [])
 
@@ -96,24 +121,31 @@ def _download_group(group_name: str, links: List[str], parent_folder: str, media
         print(f"[down_by_yt][INFO] Group '{group_name}' không có link → bỏ qua.")
         return
 
-    # Tạo thư mục con: parent_folder/group_name
     group_dir = ensure_folder(parent_folder, group_name)
 
     print(f"[down_by_yt] === Group: {group_name} -> {len(links)} link")
     print(f"[down_by_yt] Folder: {group_dir}")
 
-    # Cấu hình chung cho yt-dlp
+    # Base ydl options
     ydl_opts = {
-        "outtmpl": os.path.join(group_dir, "%(title).80s-%(id)s.%(ext)s"),
+        "outtmpl": {"default": os.path.join(group_dir, "temp_%(id)s.%(ext)s")},
         "noplaylist": True,
         "ignoreerrors": True,
         "restrictfilenames": True,
         "continuedl": True,
         "quiet": False,
+        "retries": YTDLP_RETRIES,
+        "sleep_interval": YTDLP_SLEEP_INTERVAL,
+        "max_sleep_interval": YTDLP_MAX_SLEEP_INTERVAL,
+        # giảm warning SABR
+        "extractor_args": {"youtube": {"player_client": [YTDLP_PLAYER_CLIENT]}},
     }
 
-    # Nếu có ffmpeg và sau này dùng mp3/mp4 merge thì cho yt-dlp biết
+    if COOKIES_FILE and os.path.isfile(COOKIES_FILE):
+        ydl_opts["cookiefile"] = COOKIES_FILE
+
     if HAS_FFMPEG:
+        # ffmpeg_location nên là folder chứa ffmpeg.exe
         ydl_opts["ffmpeg_location"] = os.path.dirname(FFMPEG_PATH)
 
     media_type = media_type.lower().strip()
@@ -121,7 +153,6 @@ def _download_group(group_name: str, links: List[str], parent_folder: str, media
     # ======================== AUDIO (mp3) ========================
     if media_type == "mp3":
         if HAS_FFMPEG:
-            # Dùng ffmpeg để convert sang mp3
             ydl_opts.update({
                 "format": "bestaudio/best",
                 "postprocessors": [{
@@ -131,49 +162,47 @@ def _download_group(group_name: str, links: List[str], parent_folder: str, media
                 }],
             })
         else:
-            # Không có ffmpeg -> chỉ tải audio gốc, không convert
             print(
                 "[down_by_yt][WARN] Bạn chọn mp3 nhưng ffmpeg KHÔNG tìm thấy.\n"
                 "  → Sẽ chỉ tải 'bestaudio/best' (webm/m4a...), KHÔNG convert sang .mp3.\n"
                 "  Nếu muốn file .mp3, hãy cài ffmpeg và thêm vào PATH."
             )
-            ydl_opts.update({
-                "format": "bestaudio/best",
-            })
+            ydl_opts.update({"format": "bestaudio/best"})
 
-    # ======================== VIDEO (mp4 H.264, PREMIERE-FRIENDLY) ========================
+    # ======================== VIDEO (mp4 H.264) ========================
     else:
-        # Mục tiêu:
-        #   - CHỈ tải format Premiere ăn chắc: MP4 + H.264 (avc1)
-        #   - Nếu có ffmpeg: cho phép tải video+audio tách rồi merge thành mp4
-        #   - Nếu KHÔNG có ffmpeg: chỉ lấy progressive mp4 h.264; nếu không có thì SKIP
         if HAS_FFMPEG:
-            # Ưu tiên:
-            #   1) best video-only mp4 (avc1) + best audio m4a -> merge mp4
-            #   2) nếu không có -> progressive mp4 (avc1)
             ydl_opts.update({
                 "format": (
                     "bv*[ext=mp4][vcodec^=avc1]+ba[ext=m4a]/"
                     "b[ext=mp4][vcodec^=avc1]"
                 ),
                 "merge_output_format": "mp4",
+                "final_ext": "mp4",
             })
             print("[down_by_yt] Dùng profile VIDEO MP4(H.264) + merge bằng ffmpeg cho Premiere.")
         else:
-            # Không có ffmpeg: chỉ chấp nhận progressive mp4 H.264
-            # Nếu video không có stream này -> yt-dlp sẽ báo lỗi và bỏ qua.
             ydl_opts.update({
                 "format": "b[ext=mp4][vcodec^=avc1]",
+                "final_ext": "mp4",
             })
             print(
                 "[down_by_yt][WARN] ffmpeg KHÔNG có, chỉ tải được progressive MP4 H.264.\n"
                 "  Nếu video không có định dạng này thì sẽ bị SKIP."
             )
 
-    # Tải từng link
+    # ✅ KHÔNG FILTER GÌ HẾT: tải đúng thứ tự links
     with YoutubeDL(ydl_opts) as ydl:
-        for i, url in enumerate(links, start=1):
-            print(f"[down_by_yt]   ({i}/{len(links)}) Download: {url}")
+        for idx, url in enumerate(links, start=INDEX_START):
+            tmpl = os.path.join(group_dir, f"{idx:0{INDEX_PAD}d}.%(ext)s")
+
+            # outtmpl là dict -> update "default"
+            if isinstance(ydl.params.get("outtmpl"), dict):
+                ydl.params["outtmpl"]["default"] = tmpl
+            else:
+                ydl.params["outtmpl"] = {"default": tmpl}
+
+            print(f"[down_by_yt]   ({idx - INDEX_START + 1}/{len(links)}) Download -> index={idx}: {url}")
             try:
                 ydl.download([url])
             except Exception as e:
@@ -181,10 +210,7 @@ def _download_group(group_name: str, links: List[str], parent_folder: str, media
 
 
 # ---------------------------------------------------------------------------
-# Hàm public: AutoTool sẽ gọi download_main()
-#   - parent_folder: thư mục resource của project Premiere
-#   - txt_name: đường dẫn dl_links.txt
-#   - _type: 'mp4' (video H.264+MP4) hoặc 'mp3'
+# Public
 # ---------------------------------------------------------------------------
 def download_main(parent_folder: str, txt_name: str, _type: str = "mp4"):
     print("[down_by_yt] === START download_main ===")
@@ -192,8 +218,10 @@ def download_main(parent_folder: str, txt_name: str, _type: str = "mp4"):
     print(f"[down_by_yt] txt_name      = {txt_name}")
     print(f"[down_by_yt] type          = {_type}")
     print(f"[down_by_yt] ffmpeg        = {FFMPEG_PATH if HAS_FFMPEG else 'NOT FOUND'}")
+    print(f"[down_by_yt] index naming  = start={INDEX_START}, pad={INDEX_PAD}")
+    print(f"[down_by_yt] MODE          = download-only (no subtitle filter/check)")
+    print(f"[down_by_yt] player_client = {YTDLP_PLAYER_CLIENT}")
 
-    # Đảm bảo thư mục cha tồn tại
     try:
         os.makedirs(parent_folder, exist_ok=True)
     except Exception as e:
@@ -201,7 +229,6 @@ def download_main(parent_folder: str, txt_name: str, _type: str = "mp4"):
         print("[down_by_yt] === END download_main ===")
         return
 
-    # Parse file dl_links.txt
     groups = parse_links_from_txt(txt_name)
     if not groups:
         print("[down_by_yt][WARN] Không tìm thấy group/link nào trong file link!")
@@ -217,7 +244,6 @@ def download_main(parent_folder: str, txt_name: str, _type: str = "mp4"):
         print(f"[down_by_yt][WARN] Loại '{_type}' không hợp lệ → dùng 'mp4'.")
         media_type = "mp4"
 
-    # Tải từng group
     for idx, (group, links) in enumerate(groups.items(), start=1):
         print(f"[down_by_yt] --- ({idx}/{total_groups}) Group '{group}' ---")
         _download_group(group, links, parent_folder, media_type)
@@ -225,9 +251,6 @@ def download_main(parent_folder: str, txt_name: str, _type: str = "mp4"):
     print("[down_by_yt] === END download_main ===")
 
 
-# ---------------------------------------------------------------------------
-# Test trực tiếp (không qua GUI)
-# ---------------------------------------------------------------------------
 if __name__ == "__main__":
     THIS_DIR = os.path.abspath(os.path.dirname(__file__))
     ROOT_DIR = os.path.abspath(os.path.join(THIS_DIR, "..", ".."))
@@ -236,7 +259,4 @@ if __name__ == "__main__":
     parent_folder = os.path.join(ROOT_DIR, "test_download")
     txt_name = os.path.join(DATA_DIR, "dl_links.txt")
 
-    print("Test download_main với:")
-    print("  parent_folder =", parent_folder)
-    print("  txt_name      =", txt_name)
     download_main(parent_folder, txt_name, _type="mp4")

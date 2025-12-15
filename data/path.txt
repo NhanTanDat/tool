@@ -1,4 +1,4 @@
-project_slug=doremon
-data_folder=C:/Users/Tam/Desktop/aThanh/autotool/data/doremon
-project_path=C:/Users/Tam/Documents/Adobe/Premiere Pro/22.0/doremon.prproj
+project_slug=test
+data_folder=C:/Users/Tam/Desktop/aThanh/autotool/data/test
+project_path=C:/Users/Tam/Documents/Adobe/Premiere Pro/22.0/test.prproj
 resource_dir=C:/Users/Tam/Documents/Adobe/Premiere Pro/22.0/resource

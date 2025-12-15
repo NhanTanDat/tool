@@ -12,3 +12,7 @@
 # !data/
 !data/path.txt
 !.vscode/*.json
+
+.env
+.env.*
+

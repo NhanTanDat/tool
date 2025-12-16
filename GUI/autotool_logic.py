@@ -1,6 +1,6 @@
 import os
 import sys
-from typing import Callable
+from typing import Callable, Any, Optional
 
 # =====================================================================
 # ĐỊNH NGHĨA ĐƯỜNG DẪN GỐC & DATA (DÙNG CHUNG CHO CẢ GUI & LOGIC)
@@ -77,6 +77,54 @@ class AutoToolLogic:
         self.data_dir = data_dir
 
     # -----------------------------------------------------------------
+    def _parse_int(self, v: Any, default: int) -> int:
+        try:
+            if isinstance(v, int):
+                return v
+            s = str(v).strip()
+            if not s:
+                return default
+            return int(s)
+        except Exception:
+            return default
+
+    def _call_get_links_main_compat(
+        self,
+        get_link_mod: Any,
+        names_txt: str,
+        links_txt: str,
+        project_name: str,
+        videos_per_keyword: int,
+        log: Callable[[str], None],
+    ) -> None:
+        """
+        Gọi get_link theo kiểu tương thích:
+        - Ưu tiên: positional thứ 4 là int (vì code get_link của bạn check isinstance(args[3], int))
+        - Fallback: kwargs videos_per_keyword (nếu get_link của bạn dùng kiểu đó)
+        """
+        # ✅ Cách chắc ăn nhất với code get_link bạn đưa: truyền VPK ở args[3] dạng int
+        try:
+            get_link_mod.get_links_main(names_txt, links_txt, project_name, int(videos_per_keyword))
+            return
+        except TypeError as e:
+            log(f"[get_link] WARN: get_links_main positional vpk không hợp lệ: {e} -> thử kwargs videos_per_keyword")
+        except Exception as e:
+            # nếu lỗi khác (429, network...) vẫn throw ra ngoài để caller handle
+            raise
+
+        # ✅ Fallback: truyền bằng kwargs videos_per_keyword
+        try:
+            get_link_mod.get_links_main(
+                names_txt,
+                links_txt,
+                project_name,
+                videos_per_keyword=int(videos_per_keyword),
+            )
+            return
+        except Exception:
+            raise
+
+    # -----------------------------------------------------------------
     def run_automation_for_project(
         self,
         proj_path: str,
@@ -93,9 +141,6 @@ class AutoToolLogic:
         update_progress: Callable[[float, str | None], None],
     ) -> None:
         """
-        Toàn bộ logic cũ trong AutoToolGUI.run_automation_for_project()
-        được chuyển sang đây.
-
         - log(msg): dùng để ghi log (GUI sẽ truyền self.log)
         - update_progress(value, message): cập nhật progress bar (0–100)
         """
@@ -127,15 +172,14 @@ class AutoToolLogic:
 
         # Lazy import heavy modules only now to avoid initial GUI lag.
         try:
-            from core.downloadTool import down_by_yt, get_link  # type: ignore
+            from core.downloadTool import get_link  # type: ignore
         except Exception:
             try:
                 import importlib
-                down_by_yt = importlib.import_module("core.downloadTool.down_by_yt")  # type: ignore
-                get_link = importlib.import_module("core.downloadTool.get_link")      # type: ignore
-            except Exception as e:  # pragma: no cover - chỉ log lỗi runtime
-                log(f"ERROR: Cannot import modules (core.downloadTool.*): {e}")
-                update_progress(100, "Lỗi import core.downloadTool.")
+                get_link = importlib.import_module("core.downloadTool.get_link")  # type: ignore
+            except Exception as e:
+                log(f"ERROR: Cannot import module core.downloadTool.get_link: {e}")
+                update_progress(100, "Lỗi import core.downloadTool.get_link.")
                 return
 
         # Build absolute paths (PyInstaller aware: use _MEIPASS if present)
@@ -170,14 +214,6 @@ class AutoToolLogic:
 
         # 1. CHUẨN BỊ DANH SÁCH KEYWORD – KHÔNG TỰ GEN NỮA
         try:
-            # (tuỳ) vẫn ghi marker cho ExtendScript nếu bạn còn dùng
-            try:
-                from core.project_data import write_current_project_marker  # type: ignore
-                write_current_project_marker(safe_project)
-                log(f"Đánh dấu project hiện tại: {safe_project}")
-            except Exception as _pmErr:
-                log(f"CẢNH BÁO: Không ghi được marker project ({_pmErr})")
-
             # BẮT BUỘC phải có list_name.txt do bạn tự tạo
             if not os.path.isfile(names_txt):
                 log(f"LỖI: Không tìm thấy file keyword: {names_txt}")
@@ -209,76 +245,64 @@ class AutoToolLogic:
             update_progress(100, "Lỗi chuẩn bị keyword.")
             return
 
-        # 2. Generate links file theo chế độ (dùng AI get_link)
+        # 2. Generate links file theo chế độ (✅ LẤY SỐ TỪ GUI)
         try:
-            # Read parameters (parse từ string GUI truyền xuống)
-            try:
-                mpk = int((videos_per_keyword or "").strip() or '10')
-            except Exception:
-                mpk = 10
-            try:
-                mx_max = int((max_duration or "").strip() or '20')
-            except Exception:
-                mx_max = 20
-            try:
-                mn_min = int((min_duration or "").strip() or '4')
-            except Exception:
-                mn_min = 4
-            max_minutes = mx_max if mx_max > 0 else None
-            min_minutes = mn_min if mn_min > 0 else None
-            try:
-                ipk = int((images_per_keyword or "").strip() or '10')
-            except Exception:
-                ipk = 10
+            # ✅ parse số từ GUI (StringVar)
+            mpk = self._parse_int(videos_per_keyword, 20)   # videos per keyword
+            ipk = self._parse_int(images_per_keyword, 10)   # (có thể dùng cho image-only nếu cần)
+            mx_max = self._parse_int(max_duration, 20)
+            mn_min = self._parse_int(min_duration, 4)
+
+            if mpk <= 0:
+                mpk = 1
 
             force_flag = bool(regen_links)
 
+            log(f"[CONFIG] videos_per_keyword={mpk} | images_per_keyword={ipk} | min={mn_min} | max={mx_max}")
+            update_progress(7, "Đang tạo link...")
+
             if mode_l == 'both':
                 log("Đang tạo link (cả VIDEO và ẢNH)...")
-                # LƯU Ý: project_name phải là tham số POSitional thứ 3
-                get_link.get_links_main(
-                    names_txt,     # keywords_file
-                    links_txt,     # output_txt (video)
-                    safe_project,  # project_name (POSitional)
-                    max_per_keyword=mpk,
-                    max_minutes=max_minutes,
-                    min_minutes=min_minutes,
-                    images_per_keyword=ipk,
-                )
-                log(f"Đã tạo link VIDEO -> {links_txt}")
-                log(f"Đã tạo link ẢNH -> {links_img_txt}")  # file này do get_links_main tự tạo trong cùng thư mục
+                # ✅ gọi đúng vpk từ GUI
+                self._call_get_links_main_compat(get_link, names_txt, links_txt, safe_project, mpk, log)
+
+                # get_link của bạn tự sinh dl_links_image.txt từ dl_links.txt
+                if os.path.isfile(links_txt):
+                    log(f"Đã tạo link VIDEO -> {links_txt}")
+                if os.path.isfile(links_img_txt):
+                    log(f"Đã tạo link ẢNH  -> {links_img_txt}")
+                else:
+                    log(f"[WARN] Chưa thấy file ảnh {links_img_txt} (get_link có thể dùng tên khác).")
 
             elif mode_l == 'video':
                 do_regen = True
                 if os.path.isfile(links_txt) and not force_flag:
                     do_regen = False
-                    log("Giữ lại link VIDEO hiện có (user chọn)")
+                    log("Giữ lại link VIDEO hiện có (regen_links=False)")
                 if do_regen:
                     log("Đang tạo link VIDEO...")
-                    get_link.get_links_main_video(
-                        names_txt,     # keywords_file
-                        links_txt,     # output_txt
-                        safe_project,  # project_name (POSitional)
-                        max_per_keyword=mpk,
-                        max_minutes=max_minutes,
-                        min_minutes=min_minutes,
-                    )
+                    self._call_get_links_main_compat(get_link, names_txt, links_txt, safe_project, mpk, log)
                     log(f"Đã tạo link VIDEO -> {links_txt}")
 
             elif mode_l == 'image':
-                do_regen = True
-                if os.path.isfile(links_img_txt) and not force_flag:
-                    do_regen = False
-                    log("Giữ lại link ẢNH hiện có (user chọn)")
-                if do_regen:
-                    log("Đang tạo link ẢNH...")
-                    get_link.get_links_main_image(
-                        names_txt,      # keywords_file
-                        links_img_txt,  # output_txt
-                        safe_project,   # project_name (POSitional)
-                        images_per_keyword=ipk,
-                    )
+                # Image-only: cần có links_txt trước để sinh links_img_txt (vì ảnh dựa trên video id)
+                if (not os.path.isfile(links_txt)) or force_flag:
+                    log("Chế độ IMAGE: cần tạo link VIDEO trước để sinh link ẢNH...")
+                    self._call_get_links_main_compat(get_link, names_txt, links_txt, safe_project, max(1, mpk), log)
+
+                # nếu module get_link có helper auto gen ảnh thì gọi (không có cũng không sao vì get_links_main đã auto)
+                try:
+                    if hasattr(get_link, "_auto_gen_image_links"):
+                        get_link._auto_gen_image_links(links_txt, links_img_txt)  # type: ignore
+                except Exception as e:
+                    log(f"[WARN] _auto_gen_image_links lỗi: {e}")
+
+                if os.path.isfile(links_img_txt):
                     log(f"Đã tạo link ẢNH -> {links_img_txt}")
+                else:
+                    log(f"LỖI: Không tạo được link ảnh: {links_img_txt}")
+                    update_progress(100, "Lỗi tạo link ảnh.")
+                    return
 
             update_progress(10, "Đã tạo link xong.")
         except Exception as e:
@@ -354,7 +378,6 @@ class AutoToolLogic:
 
                 log("Bắt đầu phân tích video bằng Genmini để sinh timeline...")
 
-                # Giữ behaviour cũ: mode both yêu cầu ảnh ok (nếu bạn muốn bỏ điều kiện này thì xoá block if này)
                 if mode_l == 'both' and not image_done:
                     log("CẢNH BÁO: Chế độ both nhưng ảnh chưa tải xong. Bỏ qua sinh timeline.")
                     update_progress(100, "Bỏ qua sinh timeline do thiếu ảnh.")
@@ -432,10 +455,7 @@ class AutoToolLogic:
         links_img_txt = os.path.join(links_dir, "dl_links_image.txt")
         if not os.path.isfile(links_img_txt):
             log(f"LỖI: Không tìm thấy file link ảnh: {links_img_txt}")
-            log(
-                "Hãy chạy 'Chạy tự động' để tạo link trước "
-                "hoặc kiểm tra thư mục link tuỳ chọn."
-            )
+            log("Hãy chạy 'Chạy tự động' để tạo link trước hoặc kiểm tra thư mục link.")
             return
 
         try:
@@ -447,10 +467,6 @@ class AutoToolLogic:
 
         try:
             attempted = down_image.download_images_main(parent, links_img_txt)
-            log(
-                f"Đã gửi tải {attempted} ảnh. "
-                f"Xem kết quả trong các thư mục *_img tại: {parent}"
-            )
+            log(f"Đã gửi tải {attempted} ảnh. Xem kết quả trong các thư mục *_img tại: {parent}")
         except Exception as e:
             log(f"LỖI khi tải ảnh: {e}")
-    

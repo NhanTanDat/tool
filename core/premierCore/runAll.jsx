@@ -13,6 +13,7 @@ function normalizePath(p) {
 
 function joinPath(a, b) {
     if (!a) return b || '';
+    
     if (!b) return a || '';
     var s = a.charAt(a.length - 1);
     return (s === '/' || s === '\\') ? (a + b) : (a + '/' + b);
@@ -127,8 +128,10 @@ function runAll() {
     
     
     
+    
     log('DONE.');
 }
 
 runAll();
+
 

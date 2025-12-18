@@ -102,24 +102,55 @@ function secondsToTimecode(seconds) {
 
 /**
  * Lấy text content từ clip (nếu là text/title clip)
+ * Ưu tiên: Essential Graphics text > Clip name > ProjectItem name
  */
 function getClipText(clipItem) {
     try {
-        // Premiere text clips thường có projectItem.name hoặc cần parse từ metadata
-        var name = clipItem.name || '';
+        // Method 1: Try to get Essential Graphics text content
+        // Check if this is a Motion Graphics Template (MOGRT)
+        if (clipItem.projectItem && clipItem.projectItem.type === ProjectItemType.CLIP) {
+            try {
+                // Try to access the source text from the clip
+                // For Essential Graphics, the text might be in the clip's name after user edits it
+                var clipName = clipItem.name || '';
 
-        // Nếu là offline clip hoặc text layer, tên thường chứa text
-        if (name && name.length > 0) {
+                // If clip name is NOT "Graphic" or empty, use it
+                if (clipName && clipName !== 'Graphic' && clipName.length > 0) {
+                    log('Using clip name: ' + clipName);
+                    return clipName;
+                }
+            } catch (e) {
+                // Continue to fallback
+            }
+        }
+
+        // Method 2: Check clip name (works if user renamed the clip)
+        var name = clipItem.name || '';
+        if (name && name !== 'Graphic' && name.length > 0) {
+            log('Using clip name: ' + name);
             return name;
         }
 
-        // Fallback: Lấy từ projectItem
+        // Method 3: Try projectItem name
         if (clipItem.projectItem && clipItem.projectItem.name) {
-            return clipItem.projectItem.name;
+            var piName = clipItem.projectItem.name;
+            if (piName && piName !== 'Graphic' && piName.length > 0) {
+                log('Using projectItem name: ' + piName);
+                return piName;
+            }
         }
 
-        return '';
+        // Method 4: Try to get text from MoGRT parameters (Advanced)
+        // This requires accessing the MOGRT's text parameters
+        // Unfortunately, ExtendScript API doesn't provide direct access to MOGRT text params
+
+        // Fallback: Return "Graphic" with warning
+        log('WARN: Could not extract text, clip name is default "Graphic"');
+        log('      Please RENAME the clip in timeline to the keyword you want!');
+        return name || 'Graphic';
+
     } catch (e) {
+        log('ERROR in getClipText: ' + e);
         return '';
     }
 }

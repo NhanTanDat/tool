@@ -8,11 +8,14 @@ Ngôn ngữ: Vietnamese (có thể chuyển sang English nếu cần). Đây là
 3. Xuất metadata timeline (clip start/end) từ Premiere ra CSV.
 4. Đọc CSV timeline và tự động cắt – chèn subclip vào sequence.
 5. Chạy các script `.jsx` trực tiếp từ Python thông qua COM.
+6. **🆕 AI Auto V4 Workflow**: Đọc keywords từ Track 3, AI tìm video phù hợp, tự động cắt và đẩy vào V4!
 
 Thư mục chính quan trọng:
 - `core/downloadTool/` – công cụ lấy link (`get_link.py`).
 - `core/premierCore/` – các script Premiere: `getTimeline.jsx`, `cutAndPush.jsx`, `importResource.jsx`.
+- `core/ai/` – **🆕 AI video scene matcher và auto V4 workflow**.
 - `data/` – nơi tập trung input/output (tự tạo nếu chưa có).
+- `docs/` – **🆕 Tài liệu chi tiết về AI Auto V4 Workflow**.
 
 ------------------------------------------------------------
 CÀI ĐẶT
@@ -118,6 +121,29 @@ Script `cutAndPush.jsx`:
 - Đọc file CSV timeline
 - Tự động cắt và chèn subclip vào sequence
 - Sử dụng clip ngẫu nhiên từ các Bin
+
+### 5. 🆕 AI Auto V4 Workflow
+
+**Tính năng mới cho phép:**
+- Đọc keywords tự động từ **Track 3** trong Premiere (không cần nhập tay)
+- Sử dụng **AI (Gemini)** để tìm video và scenes phù hợp
+- Tự động cắt và đẩy vào **Track V4** đúng timeline
+
+**Quick Start:**
+```bash
+# Xem hướng dẫn chi tiết
+cat docs/QUICK_START_AI_V4.md
+
+# Hoặc xem tài liệu đầy đủ
+cat docs/AI_AUTO_V4_WORKFLOW.md
+```
+
+**Workflow:**
+1. Thêm text clips vào Track 3 với keywords
+2. Chạy "🤖 AI Auto V4" trong GUI
+3. AI tự động tìm và cắt video phù hợp vào V4
+
+**Xem:** `docs/AI_AUTO_V4_WORKFLOW.md` để biết chi tiết đầy đủ.
 
 
 ------------------------------------------------------------

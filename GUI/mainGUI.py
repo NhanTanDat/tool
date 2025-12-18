@@ -831,6 +831,11 @@ class AutoToolGUI(tk.Tk):
             style="Accent.TButton",
             command=self.run_premier_automation,
         ).pack(side="left", padx=(0, 6))
+        ttk.Button(
+            action_row,
+            text="🤖  AI Auto V4",
+            command=self.run_ai_v4_workflow,
+        ).pack(side="left", padx=(0, 6))
         ttk.Button(action_row, text="🧹  Xoá log", command=self.clear_log2).pack(
             side="left", padx=4
         )
@@ -1160,6 +1165,115 @@ class AutoToolGUI(tk.Tk):
                 self.premier_list.insert('end', item)
         except Exception:
             pass
+
+    # =================================================================
+    # AI Auto V4 Workflow
+    # =================================================================
+    def run_ai_v4_workflow(self):
+        """
+        Chạy workflow mới:
+        1. Đọc keywords từ Track 3 trong Premiere
+        2. AI analyze videos và match với keywords
+        3. Auto cut và đẩy vào V4
+        """
+        if not self.premier_projects:
+            messagebox.showwarning("AI V4", "Chưa có file .prproj nào trong danh sách.")
+            return
+
+        # Lấy project đầu tiên (hoặc cho user chọn)
+        proj_path = self.premier_projects[0]
+
+        self.log2("=== BẮT ĐẦU AI AUTO V4 WORKFLOW ===")
+        self.log2(f"Project: {proj_path}")
+
+        # Setup paths
+        project_slug = self._derive_project_slug(proj_path)
+        data_folder = os.path.join(DATA_DIR, project_slug)
+        resource_dir = os.path.join(os.path.dirname(proj_path), 'resource')
+
+        # Ensure folders exist
+        os.makedirs(data_folder, exist_ok=True)
+        if not os.path.exists(resource_dir):
+            self.log2(f"LỖI: Resource folder không tồn tại: {resource_dir}")
+            messagebox.showerror("AI V4", f"Resource folder không tồn tại:\n{resource_dir}")
+            return
+
+        # Write path.txt config
+        path_txt_content = (
+            f"project_slug={project_slug}\n"
+            f"data_folder={data_folder.replace(chr(92), '/')}\n"
+            f"project_path={proj_path.replace(chr(92), '/')}\n"
+            f"resource_dir={resource_dir.replace(chr(92), '/')}\n"
+        )
+        path_txt_path = os.path.join(DATA_DIR, 'path.txt')
+        try:
+            with open(path_txt_path, 'w', encoding='utf-8') as f:
+                f.write(path_txt_content)
+            self.log2(f"✓ Đã cập nhật path.txt")
+        except Exception as e:
+            self.log2(f"LỖI khi ghi path.txt: {e}")
+            return
+
+        # Ask for Gemini API key
+        from tkinter import simpledialog
+        api_key = simpledialog.askstring(
+            "Gemini API Key",
+            "Nhập Gemini API key (hoặc để trống để dùng fallback):",
+            parent=self
+        )
+
+        # Import workflow
+        try:
+            from core.ai.auto_v4_workflow import AutoV4Workflow
+        except Exception as e:
+            self.log2(f"LỖI: Không import được AutoV4Workflow: {e}")
+            messagebox.showerror("AI V4", f"Không import được module:\n{e}")
+            return
+
+        # Create workflow
+        workflow = AutoV4Workflow(
+            project_path=proj_path,
+            data_folder=data_folder,
+            resource_folder=resource_dir,
+            gemini_api_key=api_key or None,
+            log_callback=self.log2,
+        )
+
+        # Show instructions
+        instructions = """
+HƯỚNG DẪN SỬ DỤNG AI AUTO V4:
+
+1. MỞ PREMIERE PRO và mở project của bạn
+2. Đảm bảo sequence có:
+   - Track 3 (V3): Chứa text clips với keywords
+   - Track 4 (V4): Sẽ được fill tự động
+3. Chọn sequence cần xử lý (active sequence)
+
+WORKFLOW SẼ THỰC HIỆN:
+→ Bước 1: Chạy extractTrack3Keywords.jsx
+   (Cần chạy trong VS Code ExtendScript Debugger)
+→ Bước 2: AI analyze videos
+→ Bước 3: Chạy autoCutAndPushV4.jsx
+   (Cần chạy trong VS Code ExtendScript Debugger)
+
+Nhấn OK để tiếp tục...
+"""
+        result = messagebox.showinfo("AI V4 Workflow", instructions)
+
+        # Run workflow
+        try:
+            success = workflow.run_full_workflow()
+            if success:
+                self.log2("✓✓✓ WORKFLOW HOÀN THÀNH ✓✓✓")
+                messagebox.showinfo("Thành công", "AI Auto V4 workflow hoàn thành!")
+            else:
+                self.log2("XXX WORKFLOW FAILED XXX")
+                messagebox.showerror("Lỗi", "Workflow thất bại. Xem log để biết chi tiết.")
+        except Exception as e:
+            self.log2(f"LỖI workflow: {e}")
+            messagebox.showerror("Lỗi", f"Lỗi khi chạy workflow:\n{e}")
+
+        self.log2("=== KẾT THÚC AI AUTO V4 WORKFLOW ===")
 
     # =================================================================
     # Download images (nếu chỉ muốn tải ảnh)

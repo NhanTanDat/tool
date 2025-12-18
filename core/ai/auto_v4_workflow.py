@@ -62,16 +62,16 @@ class AutoV4Workflow:
         """Log với callback"""
         self.log_callback(msg)
 
-    def run_jsx_script(self, jsx_path: Path) -> bool:
+    def run_jsx_script(self, jsx_path: Path, wait_seconds: int = 10) -> bool:
         """
-        Chạy JSX script thông qua ExtendScript command line hoặc automation.
+        Chạy JSX script TỰ ĐỘNG thông qua VS Code ExtendScript.
 
-        Có 2 cách:
-        1. Dùng pywinauto để tự động hóa VS Code (giống control.py)
-        2. Dùng Adobe ExtendScript Toolkit CLI (nếu có)
+        Args:
+            jsx_path: Đường dẫn đến file .jsx
+            wait_seconds: Thời gian chờ script chạy xong
 
-        Ở đây ta dùng cách đơn giản: in hướng dẫn cho user chạy manual
-        hoặc tích hợp với control.py
+        Returns:
+            bool: True nếu thành công
         """
         self.log(f"[run_jsx_script] {jsx_path.name}")
 
@@ -79,44 +79,64 @@ class AutoV4Workflow:
             self.log(f"ERROR: JSX script not found: {jsx_path}")
             return False
 
-        # TODO: Tích hợp với control.py để tự động chạy JSX
-        # Hiện tại: hướng dẫn manual
-        self.log(f"  → Cần chạy script này trong Premiere Pro:")
-        self.log(f"     {jsx_path}")
-        self.log(f"  → Hoặc dùng VS Code ExtendScript Debugger")
+        try:
+            # Import control_jsx module
+            from core.premierCore.control_jsx import run_jsx_in_premiere
 
-        # Placeholder: giả sử script đã chạy thành công
-        # Trong production, cần implement automation thực sự
-        return True
+            # Chạy JSX tự động
+            self.log(f"  → Đang chạy tự động qua VS Code ExtendScript...")
+            success = run_jsx_in_premiere(
+                str(jsx_path),
+                premiere_version="2022",  # TODO: Make configurable
+                wait_seconds=wait_seconds
+            )
+
+            if success:
+                self.log(f"  ✓ Script chạy thành công!")
+            else:
+                self.log(f"  ✗ Script thất bại")
+
+            return success
+
+        except Exception as e:
+            self.log(f"ERROR: Không thể chạy JSX tự động: {e}")
+            self.log(f"  → Fallback: Hãy chạy thủ công:")
+            self.log(f"     {jsx_path}")
+            return False
 
     def step1_extract_track3_keywords(self) -> bool:
         """
-        Bước 1: Extract keywords từ Track 3
+        Bước 1: Extract keywords từ Track 3 (TỰ ĐỘNG)
         """
         self.log("\n=== STEP 1: Extract Keywords từ Track 3 ===")
 
-        # Chạy JSX script
-        success = self.run_jsx_script(self.jsx_extract_track3)
+        # Chạy JSX script TỰ ĐỘNG (wait 15 giây cho script chạy)
+        success = self.run_jsx_script(self.jsx_extract_track3, wait_seconds=15)
 
         if not success:
             self.log("ERROR: Không chạy được extractTrack3Keywords.jsx")
             return False
 
-        # Chờ file output
-        self.log("Đang chờ file track3_keywords.json...")
-        for i in range(30):  # Chờ tối đa 30 giây
-            if self.track3_keywords_json.exists():
-                self.log(f"✓ Tìm thấy: {self.track3_keywords_json}")
-                break
-            time.sleep(1)
-        else:
-            self.log("ERROR: Timeout - không tìm thấy track3_keywords.json")
+        # Chờ thêm 1 chút để file được ghi xong
+        self.log("Đang chờ file track3_keywords.json được ghi...")
+        time.sleep(2)
+
+        # Kiểm tra file có tồn tại không
+        if not self.track3_keywords_json.exists():
+            self.log(f"ERROR: Không tìm thấy file: {self.track3_keywords_json}")
+            self.log("  → Kiểm tra xem sequence có text clips trong Track 3 không")
+            self.log("  → Kiểm tra log trong Premiere/VS Code nếu có lỗi")
             return False
 
         # Validate
         try:
             keywords = load_keywords_from_json(str(self.track3_keywords_json))
             self.log(f"✓ Loaded {len(keywords)} keywords")
+
+            if len(keywords) == 0:
+                self.log("WARNING: Không có keywords nào trong Track 3!")
+                return False
+
             return True
         except Exception as e:
             self.log(f"ERROR: Không đọc được keywords: {e}")
@@ -168,18 +188,19 @@ class AutoV4Workflow:
 
     def step3_auto_cut_push_v4(self) -> bool:
         """
-        Bước 3: Auto cut và push vào V4
+        Bước 3: Auto cut và push vào V4 (TỰ ĐỘNG)
         """
         self.log("\n=== STEP 3: Auto Cut và Push vào V4 ===")
 
-        # Chạy JSX script
-        success = self.run_jsx_script(self.jsx_auto_cut_v4)
+        # Chạy JSX script TỰ ĐỘNG (wait 20 giây cho script xử lý)
+        success = self.run_jsx_script(self.jsx_auto_cut_v4, wait_seconds=20)
 
         if not success:
             self.log("ERROR: Không chạy được autoCutAndPushV4.jsx")
             return False
 
         self.log("✓ Đã hoàn thành auto cut và push vào V4")
+        self.log("✓ Check Track V4 trong Premiere để xem kết quả!")
         return True
 
     def run_full_workflow(self) -> bool:

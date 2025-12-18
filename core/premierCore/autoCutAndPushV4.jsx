@@ -1,8 +1,8 @@
 /**
  * autoCutAndPushV4.jsx
  *
- * Đọc scene matches từ Python AI analysis
- * Tự động cắt video scenes và đẩy vào V4 theo đúng timeline của keywords trên V3
+ * Đọc genmini_map.json (đã có sẵn keyword-to-video mappings)
+ * Tự động tìm video files và đẩy vào V4 theo đúng timeline
  */
 
 function log(msg) {
@@ -92,6 +92,59 @@ function secondsToTicks(seconds) {
 }
 
 /**
+ * Tìm video file trong resource folder theo tên
+ */
+function findVideoByName(resourceFolder, videoName) {
+    // videoName có thể là: "1_Tony_Dow_best_moments"
+    // Cần tìm file video có tên tương tự trong resource folder
+
+    var folder = new Folder(resourceFolder);
+    if (!folder.exists) {
+        log('ERROR: Resource folder not found: ' + resourceFolder);
+        return null;
+    }
+
+    // Các extension video phổ biến
+    var videoExts = ['.mp4', '.mov', '.avi', '.mkv', '.m4v', '.flv', '.wmv', '.webm'];
+
+    // Thử tìm file trực tiếp với từng extension
+    for (var i = 0; i < videoExts.length; i++) {
+        var filePath = joinPath(resourceFolder, videoName + videoExts[i]);
+        if (fileExists(filePath)) {
+            log('Found video: ' + filePath);
+            return filePath;
+        }
+    }
+
+    // Nếu không tìm thấy, thử tìm file có chứa videoName
+    var files = folder.getFiles();
+    for (var i = 0; i < files.length; i++) {
+        var file = files[i];
+        if (file instanceof File) {
+            var fileName = file.name.toLowerCase();
+            var searchName = videoName.toLowerCase();
+
+            // Check nếu là video file và tên chứa searchName
+            var isVideo = false;
+            for (var j = 0; j < videoExts.length; j++) {
+                if (fileName.indexOf(videoExts[j]) !== -1) {
+                    isVideo = true;
+                    break;
+                }
+            }
+
+            if (isVideo && fileName.indexOf(searchName) !== -1) {
+                log('Found video (partial match): ' + file.fsName);
+                return normalizePath(file.fsName);
+            }
+        }
+    }
+
+    log('ERROR: Video not found for name: ' + videoName);
+    return null;
+}
+
+/**
  * Tìm hoặc import video vào project
  */
 function findOrImportVideo(videoPath, resourceBin) {
@@ -151,6 +204,7 @@ function findOrCreateBin(binName, parentBin) {
 
 /**
  * Cắt và đẩy scene vào V4
+ * Nếu sceneStart và sceneEnd = 0, sẽ dùng toàn bộ video
  */
 function cutAndPushToV4(
     sequence,
@@ -165,22 +219,44 @@ function cutAndPushToV4(
         return false;
     }
 
-    log('Cut scene: ' + sceneStart + 's - ' + sceneEnd + 's');
-    log('Push to V4 at: ' + timelineStart + 's (duration: ' + timelineDuration + 's)');
+    // Nếu không có scene timing, dùng toàn bộ video
+    var useFullVideo = (sceneStart === 0 && sceneEnd === 0);
+
+    if (useFullVideo) {
+        log('Using full video (no scene timing specified)');
+        log('Push to V4 at: ' + timelineStart + 's (duration: ' + timelineDuration + 's)');
+    } else {
+        log('Cut scene: ' + sceneStart + 's - ' + sceneEnd + 's');
+        log('Push to V4 at: ' + timelineStart + 's (duration: ' + timelineDuration + 's)');
+    }
 
     // Chuyển sang ticks
-    var sceneStartTicks = secondsToTicks(sceneStart);
-    var sceneEndTicks = secondsToTicks(sceneEnd);
     var timelineStartTicks = secondsToTicks(timelineStart);
-    var sceneDurationTicks = sceneEndTicks - sceneStartTicks;
     var requiredDurationTicks = secondsToTicks(timelineDuration);
 
-    // Tạo Time object
-    var inPoint = new Time();
-    inPoint.ticks = sceneStartTicks;
+    var inPoint, outPoint, sceneDurationTicks;
 
-    var outPoint = new Time();
-    outPoint.ticks = sceneEndTicks;
+    if (useFullVideo) {
+        // Dùng toàn bộ video, crop theo required duration
+        inPoint = new Time();
+        inPoint.ticks = 0;
+
+        outPoint = new Time();
+        outPoint.ticks = requiredDurationTicks;
+
+        sceneDurationTicks = requiredDurationTicks;
+    } else {
+        // Dùng scene timing
+        var sceneStartTicks = secondsToTicks(sceneStart);
+        var sceneEndTicks = secondsToTicks(sceneEnd);
+        sceneDurationTicks = sceneEndTicks - sceneStartTicks;
+
+        inPoint = new Time();
+        inPoint.ticks = sceneStartTicks;
+
+        outPoint = new Time();
+        outPoint.ticks = sceneEndTicks;
+    }
 
     // Nếu scene ngắn hơn required duration, lấy hết
     // Nếu dài hơn, có thể crop hoặc scale (ở đây ta lấy đúng scene duration)
@@ -247,79 +323,73 @@ function cutAndPushToV4(
 }
 
 /**
- * Main processing
+ * Main processing - Đọc từ genmini_map.json
  */
-function processSceneMatches(sceneMatchesPath, sequence) {
-    log('Loading scene matches: ' + sceneMatchesPath);
+function processGenminiMap(genminiMapPath, resourceFolder, sequence) {
+    log('Loading genmini map: ' + genminiMapPath);
 
-    if (!fileExists(sceneMatchesPath)) {
-        log('ERROR: Scene matches file not found: ' + sceneMatchesPath);
+    if (!fileExists(genminiMapPath)) {
+        log('ERROR: Genmini map file not found: ' + genminiMapPath);
         return 0;
     }
 
-    var jsonContent = readFile(sceneMatchesPath);
+    var jsonContent = readFile(genminiMapPath);
     var data = parseJSON(jsonContent);
 
     if (!data) {
-        log('ERROR: Cannot parse scene matches JSON');
+        log('ERROR: Cannot parse genmini_map.json');
         return 0;
     }
 
-    var keywords = data.keywords || [];
-    var matches = data.matches || {};
+    var items = data.items || [];
 
-    log('Processing ' + keywords.length + ' keywords');
+    if (items.length === 0) {
+        log('ERROR: No items found in genmini_map.json');
+        return 0;
+    }
 
-    var resourceBin = findOrCreateBin('AI_Matched_Scenes', app.project.rootItem);
+    log('Processing ' + items.length + ' items');
+
+    var resourceBin = findOrCreateBin('Genmini_Videos', app.project.rootItem);
     var successCount = 0;
 
-    for (var i = 0; i < keywords.length; i++) {
-        var kwItem = keywords[i];
-        var keyword = kwItem.keyword;
-        var startSec = kwItem.start_seconds;
-        var endSec = kwItem.end_seconds;
-        var durationSec = kwItem.duration_seconds;
+    for (var i = 0; i < items.length; i++) {
+        var item = items[i];
+        var videoName = item.text || '';
+        var startSec = parseFloat(item.startSeconds) || 0;
+        var endSec = parseFloat(item.endSeconds) || 0;
+        var durationSec = parseFloat(item.durationSeconds) || 0;
+        var indexInTrack = item.indexInTrack || i;
 
-        log('\n--- Keyword ' + (i + 1) + '/' + keywords.length + ': "' + keyword + '" ---');
-        log('Timeline position: ' + startSec + 's - ' + endSec + 's');
+        log('\n--- Item ' + (i + 1) + '/' + items.length + ': "' + videoName + '" ---');
+        log('Timeline position: ' + startSec + 's - ' + endSec + 's (duration: ' + durationSec + 's)');
 
-        var keywordMatches = matches[keyword];
-        if (!keywordMatches || keywordMatches.length === 0) {
-            log('WARN: No matches found for keyword "' + keyword + '"');
+        if (!videoName || videoName.length === 0) {
+            log('WARN: Empty video name, skipping');
             continue;
         }
 
-        // Lấy best match (đầu tiên, đã sort by confidence)
-        var bestMatch = keywordMatches[0];
-        var videoPath = bestMatch.video_path;
-        var suggestedScenes = bestMatch.suggested_scenes || [];
-
-        if (suggestedScenes.length === 0) {
-            log('WARN: No suggested scenes for "' + keyword + '"');
+        // Tìm video file trong resource folder
+        var videoPath = findVideoByName(resourceFolder, videoName);
+        if (!videoPath) {
+            log('ERROR: Cannot find video file for: ' + videoName);
             continue;
         }
-
-        // Lấy scene đầu tiên
-        var scene = suggestedScenes[0];
-        var sceneStart = parseFloat(scene.start_time) || 0;
-        var sceneEnd = parseFloat(scene.end_time) || 0;
-
-        log('Best match: ' + videoPath);
-        log('Scene: ' + sceneStart + 's - ' + sceneEnd + 's');
 
         // Import video
         var projectItem = findOrImportVideo(videoPath, resourceBin);
         if (!projectItem) {
-            log('ERROR: Cannot import video');
+            log('ERROR: Cannot import video: ' + videoPath);
             continue;
         }
 
-        // Cut and push to V4
+        // Push to V4 (không có scene timing, dùng toàn bộ video)
+        // sceneStart = 0, sceneEnd = 0 → cutAndPushToV4 sẽ dùng full video
         var success = cutAndPushToV4(
             sequence,
             projectItem,
-            sceneStart,
-            sceneEnd,
+            0, // sceneStart = 0 (use full video)
+            0, // sceneEnd = 0 (use full video)
             startSec,
             durationSec
         );
@@ -330,9 +400,9 @@ function processSceneMatches(sceneMatchesPath, sequence) {
     }
 
     log('\n=== SUMMARY ===');
-    log('Processed: ' + keywords.length + ' keywords');
+    log('Processed: ' + items.length + ' items');
     log('Success: ' + successCount);
-    log('Failed: ' + (keywords.length - successCount));
+    log('Failed: ' + (items.length - successCount));
 
     return successCount;
 }
@@ -341,7 +411,7 @@ function processSceneMatches(sceneMatchesPath, sequence) {
  * Main function
  */
 function main() {
-    log('=== AUTO CUT AND PUSH TO V4 ===');
+    log('=== AUTO CUT AND PUSH TO V4 (từ genmini_map.json) ===');
 
     var cfg = readPathConfig();
     if (!cfg) {
@@ -350,12 +420,20 @@ function main() {
     }
 
     var dataFolder = normalizePath(cfg.data_folder || '');
+    var resourceFolder = normalizePath(cfg.resource_folder || '');
+
     if (!dataFolder) {
-        alert('ERROR: data_folder not defined');
+        alert('ERROR: data_folder not defined in path.txt');
+        return;
+    }
+
+    if (!resourceFolder) {
+        alert('ERROR: resource_folder not defined in path.txt');
         return;
     }
 
     log('Data folder: ' + dataFolder);
+    log('Resource folder: ' + resourceFolder);
 
     // Get active sequence
     var seq = app.project.activeSequence;
@@ -372,17 +450,17 @@ function main() {
         return;
     }
 
-    // Load scene matches
-    var sceneMatchesPath = joinPath(dataFolder, 'scene_matches.json');
+    // Load genmini map
+    var genminiMapPath = joinPath(dataFolder, 'genmini_map.json');
 
-    var count = processSceneMatches(sceneMatchesPath, seq);
+    var count = processGenminiMap(genminiMapPath, resourceFolder, seq);
 
     if (count > 0) {
         app.project.save();
         log('Project saved');
-        alert('Đã xử lý thành công ' + count + ' keywords và đẩy vào V4!');
+        alert('Đã xử lý thành công ' + count + ' videos và đẩy vào V4!');
     } else {
-        alert('Không có keyword nào được xử lý. Xem log để biết chi tiết.');
+        alert('Không có video nào được xử lý. Xem log để biết chi tiết.');
     }
 
     log('=== DONE ===');

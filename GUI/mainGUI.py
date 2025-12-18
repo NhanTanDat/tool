@@ -1241,22 +1241,30 @@ class AutoToolGUI(tk.Tk):
 
         # Show instructions
         instructions = """
-HƯỚNG DẪN SỬ DỤNG AI AUTO V4:
+🤖 AI AUTO V4 - WORKFLOW TỰ ĐỘNG (1 CLICK)
 
-1. MỞ PREMIERE PRO và mở project của bạn
-2. Đảm bảo sequence có:
-   - Track 3 (V3): Chứa text clips với keywords
+CHUẨN BỊ:
+1. ✅ MỞ PREMIERE PRO và mở project của bạn
+2. ✅ MỞ VS CODE (tool sẽ tự động dùng để chạy scripts)
+3. ✅ MỞ SEQUENCE có:
+   - Track 3 (V3): Chứa TEXT CLIPS với keywords
    - Track 4 (V4): Sẽ được fill tự động
-3. Chọn sequence cần xử lý (active sequence)
+4. ✅ Đảm bảo sequence đang ACTIVE (được chọn)
 
-WORKFLOW SẼ THỰC HIỆN:
-→ Bước 1: Chạy extractTrack3Keywords.jsx
-   (Cần chạy trong VS Code ExtendScript Debugger)
-→ Bước 2: AI analyze videos
-→ Bước 3: Chạy autoCutAndPushV4.jsx
-   (Cần chạy trong VS Code ExtendScript Debugger)
+WORKFLOW TỰ ĐỘNG:
+→ Bước 1: Tool tự động chạy extractTrack3Keywords.jsx
+→ Bước 2: AI analyze videos trong resource/
+→ Bước 3: Tool tự động chạy autoCutAndPushV4.jsx
+→ Kết quả: Track V4 được fill với matched scenes!
 
-Nhấn OK để tiếp tục...
+⏱️ Thời gian: ~1-2 phút (tùy số keywords)
+
+💡 LƯU Ý:
+- KHÔNG đóng Premiere/VS Code trong khi chạy
+- KHÔNG di chuyển chuột/bàn phím (automation chạy)
+- Check log để theo dõi progress
+
+Nhấn OK để bắt đầu...
 """
         result = messagebox.showinfo("AI V4 Workflow", instructions)
 

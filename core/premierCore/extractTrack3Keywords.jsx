@@ -171,40 +171,47 @@ function debugClipStructure(clipItem, clipIndex) {
 /**
  * Extract text from Essential Graphics / Motion Graphics Template
  * This handles the "Source Text" property in text layers
+ *
+ * IMPORTANT: Premiere ExtendScript has limited access to Essential Graphics text.
+ * This function tries multiple approaches to extract text.
  */
 function getTextFromComponents(clipItem) {
     try {
-        // Method 1: Access via clip components (Essential Graphics)
+        // ========== Method 1: Access via clip.components ==========
         if (clipItem.components && clipItem.components.numItems > 0) {
             for (var c = 0; c < clipItem.components.numItems; c++) {
                 var comp = clipItem.components[c];
+                var compName = (comp.displayName || comp.matchName || '').toLowerCase();
+
+                // Log component for debugging
+                log('    Checking component: ' + (comp.displayName || comp.matchName || 'Unknown'));
 
                 // Check component properties
                 if (comp.properties && comp.properties.numItems > 0) {
                     for (var p = 0; p < comp.properties.numItems; p++) {
                         var prop = comp.properties[p];
-                        var propName = (prop.displayName || '').toLowerCase();
+                        var propName = (prop.displayName || prop.matchName || '').toLowerCase();
 
-                        // Look for text-related properties
+                        // Look for ANY text-related properties
                         if (propName.indexOf('text') !== -1 ||
                             propName.indexOf('source') !== -1 ||
-                            propName === 'source text') {
+                            propName.indexOf('string') !== -1 ||
+                            propName.indexOf('content') !== -1 ||
+                            propName.indexOf('caption') !== -1 ||
+                            propName.indexOf('title') !== -1) {
 
-                            // Try to get the value
+                            log('      Found property: ' + (prop.displayName || prop.matchName));
+
+                            // Try multiple ways to get value
                             var val = null;
-                            try {
-                                val = prop.getValue();
-                            } catch (e1) {
-                                try {
-                                    val = prop.getValueAtKey(0);
-                                } catch (e2) {}
-                            }
+                            try { val = prop.getValue(); } catch (e1) {}
+                            if (!val) try { val = prop.getValueAtKey(0); } catch (e2) {}
+                            if (!val) try { val = prop.getValueAtTime(0); } catch (e3) {}
 
                             if (val && typeof val === 'string' && val.length > 0) {
-                                // Clean up the text
                                 val = val.replace(/[\r\n]+/g, ' ').replace(/\s+/g, ' ').replace(/^\s+|\s+$/g, '');
-                                if (val.length > 0) {
-                                    log('  Found text in component: "' + val + '"');
+                                if (val.length > 0 && val.toLowerCase() !== 'graphic') {
+                                    log('      => Text found: "' + val + '"');
                                     return val;
                                 }
                             }
@@ -214,30 +221,61 @@ function getTextFromComponents(clipItem) {
             }
         }
 
-        // Method 2: Check if clip has getMGTComponent (Motion Graphics Template)
+        // ========== Method 2: Access via getMGTComponent (MOGRT) ==========
         if (typeof clipItem.getMGTComponent === 'function') {
             try {
                 var mgtComp = clipItem.getMGTComponent();
-                if (mgtComp && mgtComp.properties) {
-                    for (var m = 0; m < mgtComp.properties.numItems; m++) {
-                        var mgtProp = mgtComp.properties[m];
-                        var mgtName = (mgtProp.displayName || '').toLowerCase();
+                if (mgtComp) {
+                    log('    Has MGT component');
 
-                        if (mgtName.indexOf('text') !== -1) {
+                    // Try to get properties
+                    if (mgtComp.properties && mgtComp.properties.numItems > 0) {
+                        for (var m = 0; m < mgtComp.properties.numItems; m++) {
+                            var mgtProp = mgtComp.properties[m];
+                            var mgtName = (mgtProp.displayName || '').toLowerCase();
+
+                            log('      MGT Property: ' + mgtProp.displayName);
+
+                            // Check all properties for text content
                             var mgtVal = null;
                             try { mgtVal = mgtProp.getValue(); } catch (e) {}
 
-                            if (mgtVal && typeof mgtVal === 'string') {
+                            if (mgtVal && typeof mgtVal === 'string' && mgtVal.length > 0) {
                                 mgtVal = mgtVal.replace(/[\r\n]+/g, ' ').replace(/\s+/g, ' ').replace(/^\s+|\s+$/g, '');
-                                if (mgtVal.length > 0) {
-                                    log('  Found text in MGT: "' + mgtVal + '"');
+                                if (mgtVal.length > 0 && mgtVal.toLowerCase() !== 'graphic') {
+                                    log('      => Text found in MGT: "' + mgtVal + '"');
                                     return mgtVal;
                                 }
                             }
                         }
                     }
                 }
-            } catch (e) {}
+            } catch (e) {
+                log('    MGT access error: ' + e);
+            }
+        }
+
+        // ========== Method 3: Try to access via projectItem metadata ==========
+        if (clipItem.projectItem) {
+            try {
+                // Get XMP metadata
+                var xmp = clipItem.projectItem.getXMPMetadata();
+                if (xmp && xmp.length > 0) {
+                    // Look for text content in XMP
+                    var textMatch = xmp.match(/<dc:title[^>]*>([^<]+)</i) ||
+                                   xmp.match(/<dc:description[^>]*>([^<]+)</i) ||
+                                   xmp.match(/Text[^>]*>([^<]+)</i);
+                    if (textMatch && textMatch[1]) {
+                        var xmpText = textMatch[1].replace(/^\s+|\s+$/g, '');
+                        if (xmpText.length > 0 && xmpText.toLowerCase() !== 'graphic') {
+                            log('      => Text found in XMP: "' + xmpText + '"');
+                            return xmpText;
+                        }
+                    }
+                }
+            } catch (e) {
+                log('    XMP access error: ' + e);
+            }
         }
 
         return null;
@@ -250,9 +288,31 @@ function getTextFromComponents(clipItem) {
 /**
  * Lấy text content từ clip (nếu là text/title clip)
  * Tries multiple methods to extract text from different clip types
+ *
+ * WORKAROUND for Essential Graphics limitation:
+ * If USE_CLIP_NAME_AS_KEYWORD is true, user should rename clips in timeline
+ * to the keyword they want (e.g., rename "Graphic" to "Tony Dow best moments")
  */
 function getClipText(clipItem) {
     try {
+        // WORKAROUND: Use clip name directly if enabled
+        // User should rename clips in timeline to their keywords
+        if (USE_CLIP_NAME_AS_KEYWORD) {
+            var clipName = clipItem.name || '';
+            // Clean up the name
+            clipName = clipName.replace(/^\s+|\s+$/g, '');
+
+            // Skip only very generic names
+            if (clipName && clipName.length > 0 &&
+                clipName.toLowerCase() !== 'graphic' &&
+                clipName.toLowerCase() !== 'graphics' &&
+                !clipName.match(/^graphic\s*\d*$/i) &&
+                !clipName.match(/^clip\s*\d*$/i)) {
+                log('  Using clip name as keyword: "' + clipName + '"');
+                return clipName;
+            }
+        }
+
         // Method 1: Try to get text from Essential Graphics components
         var compText = getTextFromComponents(clipItem);
         if (compText && compText.length > 0) {
@@ -279,7 +339,8 @@ function getClipText(clipItem) {
                 if (projName && projName.length > 0 &&
                     projName.indexOf('Graphics') === -1 &&
                     projName.indexOf('Title') === -1 &&
-                    projName.indexOf('Text') === -1) {
+                    projName.indexOf('Text') === -1 &&
+                    projName.toLowerCase() !== 'graphic') {
                     return projName;
                 }
             }
@@ -291,6 +352,7 @@ function getClipText(clipItem) {
             // Skip generic/system names
             if (clipName.indexOf('Graphics') === -1 &&
                 clipName.indexOf('Graphic ') === -1 &&
+                clipName.toLowerCase() !== 'graphic' &&
                 !clipName.match(/^Clip\s*\d*$/i)) {
                 return clipName;
             }
@@ -303,10 +365,18 @@ function getClipText(clipItem) {
     }
 }
 
+// ============== CONFIGURATION ==============
 // Enable debug mode to see clip structure (set to true for debugging)
-var DEBUG_MODE = false;
+var DEBUG_MODE = true;
 // Debug only first N clips (set to 0 for all)
 var DEBUG_LIMIT = 3;
+
+// WORKAROUND: If true, use clip NAME as keyword (rename clips in timeline to keywords)
+var USE_CLIP_NAME_AS_KEYWORD = true;
+
+// Alternative: Read keywords from external file (one keyword per line, matching clip order)
+// Set to empty string to disable
+var EXTERNAL_KEYWORDS_FILE = ''; // e.g., 'keywords_list.txt'
 
 /**
  * Đọc tất cả clips từ Track 3 (Video Track 3)

@@ -4,6 +4,8 @@
  * Đọc Track 3 (Video Track 3) từ Premiere sequence
  * Lấy text clips với nội dung keywords + timecode (start, end)
  * Export ra JSON/CSV để Python xử lý tiếp
+ *
+ * FIXED: Properly extract text from Essential Graphics / Text layers
  */
 
 function log(msg) {
@@ -37,10 +39,14 @@ function readLines(p) {
 
 function writeFile(path, content) {
     var f = new File(path);
+    // Set encoding to UTF-8 for proper character support
+    f.encoding = 'UTF-8';
     if (!f.open('w')) {
         log('ERROR: Cannot write to ' + path);
         return false;
     }
+    // Write UTF-8 BOM for compatibility
+    f.write('\uFEFF');
     f.write(content);
     f.close();
     return true;
@@ -101,28 +107,206 @@ function secondsToTimecode(seconds) {
 }
 
 /**
+ * Debug: Print all components and properties of a clip
+ * Use this to understand the structure of graphics clips
+ */
+function debugClipStructure(clipItem, clipIndex) {
+    log('=== DEBUG Clip ' + clipIndex + ' Structure ===');
+    log('  Name: ' + (clipItem.name || 'N/A'));
+
+    if (clipItem.projectItem) {
+        log('  ProjectItem.name: ' + (clipItem.projectItem.name || 'N/A'));
+        log('  ProjectItem.type: ' + clipItem.projectItem.type);
+    }
+
+    if (clipItem.components) {
+        log('  Components count: ' + clipItem.components.numItems);
+        for (var c = 0; c < clipItem.components.numItems; c++) {
+            var comp = clipItem.components[c];
+            log('    [' + c + '] Component: ' + (comp.displayName || comp.matchName || 'Unknown'));
+
+            if (comp.properties) {
+                log('      Properties count: ' + comp.properties.numItems);
+                for (var p = 0; p < comp.properties.numItems; p++) {
+                    var prop = comp.properties[p];
+                    var propName = prop.displayName || prop.matchName || 'Unknown';
+                    var propValue = '';
+                    try {
+                        propValue = prop.getValue();
+                        if (typeof propValue === 'string' && propValue.length > 50) {
+                            propValue = propValue.substring(0, 50) + '...';
+                        }
+                    } catch (e) {
+                        propValue = '[cannot read]';
+                    }
+                    log('        [' + p + '] ' + propName + ' = ' + propValue);
+                }
+            }
+        }
+    }
+
+    // Check for MGT component
+    if (typeof clipItem.getMGTComponent === 'function') {
+        try {
+            var mgt = clipItem.getMGTComponent();
+            if (mgt) {
+                log('  Has MGT component');
+                if (mgt.properties) {
+                    for (var m = 0; m < mgt.properties.numItems; m++) {
+                        var mgtProp = mgt.properties[m];
+                        var mgtName = mgtProp.displayName || 'Unknown';
+                        var mgtVal = '';
+                        try { mgtVal = mgtProp.getValue(); } catch (e) { mgtVal = '[error]'; }
+                        log('    MGT Property: ' + mgtName + ' = ' + mgtVal);
+                    }
+                }
+            }
+        } catch (e) {
+            log('  MGT access error: ' + e);
+        }
+    }
+    log('=== END DEBUG ===');
+}
+
+/**
+ * Extract text from Essential Graphics / Motion Graphics Template
+ * This handles the "Source Text" property in text layers
+ */
+function getTextFromComponents(clipItem) {
+    try {
+        // Method 1: Access via clip components (Essential Graphics)
+        if (clipItem.components && clipItem.components.numItems > 0) {
+            for (var c = 0; c < clipItem.components.numItems; c++) {
+                var comp = clipItem.components[c];
+
+                // Check component properties
+                if (comp.properties && comp.properties.numItems > 0) {
+                    for (var p = 0; p < comp.properties.numItems; p++) {
+                        var prop = comp.properties[p];
+                        var propName = (prop.displayName || '').toLowerCase();
+
+                        // Look for text-related properties
+                        if (propName.indexOf('text') !== -1 ||
+                            propName.indexOf('source') !== -1 ||
+                            propName === 'source text') {
+
+                            // Try to get the value
+                            var val = null;
+                            try {
+                                val = prop.getValue();
+                            } catch (e1) {
+                                try {
+                                    val = prop.getValueAtKey(0);
+                                } catch (e2) {}
+                            }
+
+                            if (val && typeof val === 'string' && val.length > 0) {
+                                // Clean up the text
+                                val = val.replace(/[\r\n]+/g, ' ').replace(/\s+/g, ' ').replace(/^\s+|\s+$/g, '');
+                                if (val.length > 0) {
+                                    log('  Found text in component: "' + val + '"');
+                                    return val;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Method 2: Check if clip has getMGTComponent (Motion Graphics Template)
+        if (typeof clipItem.getMGTComponent === 'function') {
+            try {
+                var mgtComp = clipItem.getMGTComponent();
+                if (mgtComp && mgtComp.properties) {
+                    for (var m = 0; m < mgtComp.properties.numItems; m++) {
+                        var mgtProp = mgtComp.properties[m];
+                        var mgtName = (mgtProp.displayName || '').toLowerCase();
+
+                        if (mgtName.indexOf('text') !== -1) {
+                            var mgtVal = null;
+                            try { mgtVal = mgtProp.getValue(); } catch (e) {}
+
+                            if (mgtVal && typeof mgtVal === 'string') {
+                                mgtVal = mgtVal.replace(/[\r\n]+/g, ' ').replace(/\s+/g, ' ').replace(/^\s+|\s+$/g, '');
+                                if (mgtVal.length > 0) {
+                                    log('  Found text in MGT: "' + mgtVal + '"');
+                                    return mgtVal;
+                                }
+                            }
+                        }
+                    }
+                }
+            } catch (e) {}
+        }
+
+        return null;
+    } catch (e) {
+        log('ERROR in getTextFromComponents: ' + e);
+        return null;
+    }
+}
+
+/**
  * Lấy text content từ clip (nếu là text/title clip)
+ * Tries multiple methods to extract text from different clip types
  */
 function getClipText(clipItem) {
     try {
-        // Premiere text clips thường có projectItem.name hoặc cần parse từ metadata
-        var name = clipItem.name || '';
-
-        // Nếu là offline clip hoặc text layer, tên thường chứa text
-        if (name && name.length > 0) {
-            return name;
+        // Method 1: Try to get text from Essential Graphics components
+        var compText = getTextFromComponents(clipItem);
+        if (compText && compText.length > 0) {
+            return compText;
         }
 
-        // Fallback: Lấy từ projectItem
-        if (clipItem.projectItem && clipItem.projectItem.name) {
-            return clipItem.projectItem.name;
+        // Method 2: Check projectItem for source text (for MOGRT/text clips)
+        if (clipItem.projectItem) {
+            var projItem = clipItem.projectItem;
+
+            // Try to get from project item metadata/properties
+            if (typeof projItem.getProjectColumnsMetadata === 'function') {
+                try {
+                    var metadata = projItem.getProjectColumnsMetadata();
+                    // Parse metadata for text content
+                } catch (e) {}
+            }
+
+            // Check if it's a graphics clip with editable text
+            if (projItem.type === ProjectItemType.CLIP) {
+                // For graphics templates, the name might contain text info
+                var projName = projItem.name || '';
+                // Skip generic names
+                if (projName && projName.length > 0 &&
+                    projName.indexOf('Graphics') === -1 &&
+                    projName.indexOf('Title') === -1 &&
+                    projName.indexOf('Text') === -1) {
+                    return projName;
+                }
+            }
+        }
+
+        // Method 3: Fall back to clip name (may contain text for simple titles)
+        var clipName = clipItem.name || '';
+        if (clipName && clipName.length > 0) {
+            // Skip generic/system names
+            if (clipName.indexOf('Graphics') === -1 &&
+                clipName.indexOf('Graphic ') === -1 &&
+                !clipName.match(/^Clip\s*\d*$/i)) {
+                return clipName;
+            }
         }
 
         return '';
     } catch (e) {
+        log('ERROR in getClipText: ' + e);
         return '';
     }
 }
+
+// Enable debug mode to see clip structure (set to true for debugging)
+var DEBUG_MODE = false;
+// Debug only first N clips (set to 0 for all)
+var DEBUG_LIMIT = 3;
 
 /**
  * Đọc tất cả clips từ Track 3 (Video Track 3)
@@ -146,9 +330,15 @@ function extractTrack3Keywords(sequence) {
     log('Number of clips in Track 3: ' + track3.clips.numItems);
 
     var keywords = [];
+    var noTextClips = [];
 
     for (var i = 0; i < track3.clips.numItems; i++) {
         var clip = track3.clips[i];
+
+        // Debug mode: show structure of first few clips
+        if (DEBUG_MODE && (DEBUG_LIMIT === 0 || i < DEBUG_LIMIT)) {
+            debugClipStructure(clip, i);
+        }
 
         // Lấy timecode
         var startTicks = clip.start.ticks;
@@ -165,7 +355,12 @@ function extractTrack3Keywords(sequence) {
         var keyword = getClipText(clip);
 
         if (!keyword || keyword.length === 0) {
-            log('WARN: Clip ' + i + ' không có text, skip');
+            log('WARN: Clip ' + i + ' không có text');
+            noTextClips.push({
+                index: i,
+                name: clip.name || 'N/A',
+                start_timecode: startTC
+            });
             continue;
         }
 
@@ -181,6 +376,24 @@ function extractTrack3Keywords(sequence) {
             end_timecode: endTC
         });
     }
+
+    // Report clips without text
+    if (noTextClips.length > 0) {
+        log('\n=== CLIPS WITHOUT TEXT (' + noTextClips.length + ') ===');
+        for (var j = 0; j < noTextClips.length; j++) {
+            var ntc = noTextClips[j];
+            log('  Clip ' + ntc.index + ': name="' + ntc.name + '" at ' + ntc.start_timecode);
+        }
+
+        // Auto-enable debug for first clip without text
+        if (noTextClips.length > 0 && keywords.length === 0) {
+            log('\nNo text found in any clip. Running debug on first clip...');
+            var firstClip = track3.clips[noTextClips[0].index];
+            debugClipStructure(firstClip, noTextClips[0].index);
+        }
+    }
+
+    log('\nFound ' + keywords.length + ' keywords, ' + noTextClips.length + ' clips without text');
 
     return keywords;
 }

@@ -45,8 +45,7 @@ function writeFile(path, content) {
         log('ERROR: Cannot write to ' + path);
         return false;
     }
-    // Write UTF-8 BOM for compatibility
-    f.write('\uFEFF');
+    // Write content directly without BOM
     f.write(content);
     f.close();
     return true;

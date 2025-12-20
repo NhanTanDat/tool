@@ -12,6 +12,76 @@ def copy_paste(path):
     send_keys('^v')
 
 
+def run_jsx_in_vscode(jsx_file_path, premiere_version="Adobe Premiere Pro 2022"):
+    """
+    Tự động chạy file JSX trong VS Code với ExtendScript Debugger.
+
+    Args:
+        jsx_file_path: Đường dẫn đầy đủ đến file .jsx
+        premiere_version: Tên version Premiere (default: "Adobe Premiere Pro 2022")
+
+    Returns:
+        bool: True nếu thành công, False nếu thất bại
+    """
+    try:
+        # Tìm và focus VS Code
+        vscode_found = False
+        for w in Desktop(backend="uia").windows():
+            if "Visual Studio Code" in w.window_text():
+                w.set_focus()
+                vscode_found = True
+                break
+
+        if not vscode_found:
+            print("ERROR: VS Code không đang chạy")
+            return False
+
+        sleep(0.3)
+
+        # Mở file JSX bằng Ctrl+P (Quick Open)
+        send_keys('^p')
+        sleep(0.3)
+
+        # Paste đường dẫn file
+        pyperclip.copy(jsx_file_path)
+        send_keys('^v')
+        sleep(0.3)
+        send_keys('{ENTER}')
+        sleep(0.5)
+
+        # Chạy lệnh ExtendScript: Evaluate Script in Attached Host
+        send_keys('^+p')  # Command Palette
+        sleep(0.3)
+
+        pyperclip.copy('ExtendScript: Evaluate Script in Attached Host')
+        send_keys('^v')
+        sleep(0.3)
+        send_keys('{ENTER}')
+        sleep(0.5)
+
+        # Chọn Premiere Pro
+        pyperclip.copy(premiere_version)
+        send_keys('^v')
+        sleep(0.3)
+        send_keys('{ENTER}')
+
+        print(f"✓ Đã gửi lệnh chạy: {jsx_file_path}")
+        return True
+
+    except Exception as e:
+        print(f"ERROR: {e}")
+        return False
+
+
+def focus_premiere():
+    """Focus vào cửa sổ Premiere Pro"""
+    for w in Desktop(backend="uia").windows():
+        if "Adobe Premiere Pro" in w.window_text():
+            w.set_focus()
+            return True
+    return False
+
+
 #hàm này thực hiện mở vscode và chạy file runAll.jsx tự động
 def run_premier_script(premier_path, project_path, idx):
     os.system('taskkill /IM "Adobe Premiere Pro.exe" /F')

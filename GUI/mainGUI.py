@@ -1285,8 +1285,8 @@ Nhấn OK để tiếp tục...
     # =================================================================
     def run_read_markers(self):
         """
-        Chạy script readMarkers.jsx để đọc markers từ timeline đang mở.
-        Xuất ra file markers.json trong data folder.
+        Tự động chạy script extractTrack3Keywords.jsx để đọc markers từ timeline.
+        Sử dụng pywinauto để điều khiển VS Code.
         """
         if not self.premier_projects:
             messagebox.showwarning("Đọc Markers", "Chưa có file .prproj nào trong danh sách.")
@@ -1320,44 +1320,57 @@ Nhấn OK để tiếp tục...
             self.log2(f"LỖI khi ghi path.txt: {e}")
             return
 
-        # Get JSX script path
+        # Get JSX script path - use extractTrack3Keywords.jsx
         jsx_script = os.path.join(
             os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-            'core', 'premierCore', 'readMarkers.jsx'
+            'core', 'premierCore', 'extractTrack3Keywords.jsx'
         )
 
         if not os.path.exists(jsx_script):
-            # Fallback to extractTrack3Keywords.jsx
-            jsx_script = os.path.join(
-                os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                'core', 'premierCore', 'extractTrack3Keywords.jsx'
-            )
+            self.log2(f"LỖI: Không tìm thấy script: {jsx_script}")
+            return
 
-        self.log2(f"\n📝 CHẠY SCRIPT TRONG PREMIERE PRO:")
+        self.log2(f"\n📝 Đang chạy script...")
         self.log2(f"   {jsx_script}")
-        self.log2("")
-        self.log2("Cách chạy:")
-        self.log2("1. Mở Premiere Pro với project đang mở")
-        self.log2("2. Mở file .jsx trong VS Code")
-        self.log2("3. Nhấn F5 để chạy (cần ExtendScript Debugger)")
-        self.log2("")
-        self.log2(f"Output sẽ được lưu tại:")
-        self.log2(f"   {os.path.join(data_folder, 'markers.json')}")
 
-        # Copy path to clipboard
+        # Chạy tự động qua VS Code
         try:
-            self.clipboard_clear()
-            self.clipboard_append(jsx_script)
-            self.log2("\n✓ Đã copy đường dẫn script vào clipboard!")
-        except Exception:
-            pass
+            from core.premierCore.control import run_jsx_in_vscode
 
-        # Show dialog
-        messagebox.showinfo(
-            "Đọc Markers",
-            f"Chạy script sau trong Premiere Pro:\n\n{jsx_script}\n\n"
-            f"(Đường dẫn đã được copy vào clipboard)"
-        )
+            self.log2("\n⏳ Đang gửi lệnh đến VS Code...")
+            self.log2("   (Đảm bảo VS Code và Premiere Pro đang mở)")
+
+            success = run_jsx_in_vscode(jsx_script)
+
+            if success:
+                self.log2("\n✓ Đã gửi lệnh chạy script!")
+                self.log2(f"\nOutput sẽ được lưu tại:")
+                self.log2(f"   {os.path.join(data_folder, 'track3_keywords.json')}")
+                self.log2("\n⏳ Chờ script hoàn thành trong Premiere...")
+            else:
+                self.log2("\n❌ Không thể chạy tự động.")
+                self.log2("   Hãy chạy thủ công trong VS Code.")
+                # Copy path to clipboard as fallback
+                try:
+                    self.clipboard_clear()
+                    self.clipboard_append(jsx_script)
+                    self.log2(f"\n✓ Đã copy đường dẫn vào clipboard")
+                except Exception:
+                    pass
+
+        except ImportError as e:
+            self.log2(f"\n⚠ Không import được pywinauto: {e}")
+            self.log2("Chạy thủ công:")
+            self.log2(f"   {jsx_script}")
+            # Copy path to clipboard
+            try:
+                self.clipboard_clear()
+                self.clipboard_append(jsx_script)
+            except Exception:
+                pass
+        except Exception as e:
+            self.log2(f"\n❌ LỖI: {e}")
+            self.log2("Chạy thủ công trong VS Code.")
 
     # =================================================================
     # Download images (nếu chỉ muốn tải ảnh)

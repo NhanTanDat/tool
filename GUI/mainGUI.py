@@ -841,6 +841,11 @@ class AutoToolGUI(tk.Tk):
             text="📝  Đọc Markers",
             command=self.run_read_markers,
         ).pack(side="left", padx=(0, 6))
+        ttk.Button(
+            action_row,
+            text="🚀  Download & Match",
+            command=self.run_marker_workflow,
+        ).pack(side="left", padx=(0, 6))
         ttk.Button(action_row, text="🧹  Xoá log", command=self.clear_log2).pack(
             side="left", padx=4
         )
@@ -1371,6 +1376,99 @@ Nhấn OK để tiếp tục...
         except Exception as e:
             self.log2(f"\n❌ LỖI: {e}")
             self.log2("Chạy thủ công trong VS Code.")
+
+    # =================================================================
+    # Marker-based Workflow: Download + AI Match
+    # =================================================================
+    def run_marker_workflow(self):
+        """
+        Chạy workflow dựa trên markers:
+        1. Kiểm tra keywords từ track3_keywords.json
+        2. Search YouTube và download videos
+        3. AI phân tích và match
+        4. Sinh timeline / cut list
+        """
+        if not self.premier_projects:
+            messagebox.showwarning("Marker Workflow", "Chưa có file .prproj nào.")
+            return
+
+        proj_path = self.premier_projects[0]
+        self.log2("=== BẮT ĐẦU MARKER-BASED WORKFLOW ===")
+        self.log2(f"Project: {proj_path}")
+
+        # Setup paths
+        project_slug = self._derive_project_slug(proj_path)
+        data_folder = os.path.join(DATA_DIR, project_slug)
+        resource_dir = os.path.join(os.path.dirname(proj_path), 'resource')
+
+        # Ensure folders exist
+        os.makedirs(data_folder, exist_ok=True)
+        os.makedirs(resource_dir, exist_ok=True)
+
+        # Check if keywords file exists
+        keywords_file = os.path.join(data_folder, 'track3_keywords.json')
+        if not os.path.exists(keywords_file):
+            self.log2(f"❌ Không tìm thấy: {keywords_file}")
+            self.log2("   Hãy chạy 'Đọc Markers' trước!")
+            messagebox.showwarning(
+                "Thiếu Keywords",
+                "Chưa có file track3_keywords.json!\n\n"
+                "Hãy chạy 'Đọc Markers' trước."
+            )
+            return
+
+        # Import workflow
+        try:
+            from core.ai.marker_based_workflow import MarkerBasedWorkflow
+        except Exception as e:
+            self.log2(f"❌ Không import được workflow: {e}")
+            messagebox.showerror("Lỗi", f"Không import được module:\n{e}")
+            return
+
+        # Ask for videos per keyword
+        from tkinter import simpledialog
+        vpk = simpledialog.askinteger(
+            "Videos per Keyword",
+            "Số video download cho mỗi keyword (1-10):",
+            parent=self,
+            initialvalue=3,
+            minvalue=1,
+            maxvalue=10
+        )
+        if vpk is None:
+            return
+
+        # Create workflow
+        workflow = MarkerBasedWorkflow(
+            project_path=proj_path,
+            data_folder=data_folder,
+            resource_folder=resource_dir,
+            videos_per_keyword=vpk,
+            log_callback=self.log2,
+        )
+
+        # Run in thread to not block GUI
+        import threading
+
+        def run_workflow():
+            try:
+                success = workflow.run_full_workflow()
+                if success:
+                    self.log2("\n✓✓✓ WORKFLOW HOÀN THÀNH ✓✓✓")
+                    self.log2("\nBước tiếp theo:")
+                    self.log2("   Chạy 'Chạy Auto Premier' hoặc executeCuts.jsx")
+                else:
+                    self.log2("\n❌ WORKFLOW THẤT BẠI")
+            except Exception as e:
+                self.log2(f"\n❌ LỖI: {e}")
+
+            self.log2("=== KẾT THÚC MARKER WORKFLOW ===")
+
+        thread = threading.Thread(target=run_workflow, daemon=True)
+        thread.start()
+
+        self.log2("\n⏳ Đang chạy workflow trong background...")
+        self.log2("   (Xem log để theo dõi tiến trình)")
 
     # =================================================================
     # Download images (nếu chỉ muốn tải ảnh)

@@ -120,6 +120,14 @@ class AutoV4Workflow:
         """
         self.log("\n=== STEP 1: Extract Keywords từ Track 3 ===")
 
+        # Xóa file cũ để đảm bảo lấy file mới từ Premiere
+        if self.track3_keywords_json.exists():
+            self.log("Xóa file cũ...")
+            try:
+                self.track3_keywords_json.unlink()
+            except Exception as e:
+                self.log(f"WARN: Không xóa được file cũ: {e}")
+
         # Chạy JSX script
         success = self.run_jsx_script(self.jsx_extract_track3)
 

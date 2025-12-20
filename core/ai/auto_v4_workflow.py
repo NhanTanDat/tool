@@ -23,6 +23,31 @@ ROOT_DIR = CORE_DIR.parent
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
+# ============== Load .env file ==============
+ENV_PATH = ROOT_DIR / ".env"
+
+def _load_env_file():
+    """Load environment variables from .env file"""
+    if not ENV_PATH.exists():
+        return
+    try:
+        with open(ENV_PATH, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                if "=" in line:
+                    key, _, value = line.partition("=")
+                    key = key.strip()
+                    value = value.strip().strip('"').strip("'")
+                    if key and value:
+                        os.environ.setdefault(key, value)
+    except Exception as e:
+        print(f"[WARN] Cannot read .env: {e}")
+
+# Load .env on import
+_load_env_file()
+
 from core.ai.video_scene_matcher import (
     VideoSceneMatcher,
     load_keywords_from_json,
@@ -189,6 +214,15 @@ class AutoV4Workflow:
         self.log("╔════════════════════════════════════════╗")
         self.log("║   AUTO V4 WORKFLOW - AI POWERED        ║")
         self.log("╚════════════════════════════════════════╝")
+
+        # Show API key status
+        if self.gemini_api_key:
+            key_preview = self.gemini_api_key[:8] + "..." + self.gemini_api_key[-4:]
+            self.log(f"✓ GEMINI_API_KEY loaded: {key_preview}")
+        else:
+            self.log("WARNING: GEMINI_API_KEY not found!")
+            self.log(f"  → Add to .env file: {ENV_PATH}")
+            return False
 
         # Validate inputs
         if not self.project_path.exists():

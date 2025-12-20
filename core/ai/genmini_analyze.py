@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import logging
 import os
@@ -9,6 +10,7 @@ import subprocess
 import sys
 import time
 import unicodedata
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -131,6 +133,12 @@ class Cfg:
     timeline_max_scenes_per_keyword: int = _safe_int_env("GENMINI_TIMELINE_MAX_SCENES_PER_KEYWORD", 0)
     timeline_sort_by_score: bool = _env_bool("GENMINI_TIMELINE_SORT_BY_SCORE", "1")
 
+    # Performance optimizations
+    parallel_workers: int = _safe_int_env("GENMINI_PARALLEL_WORKERS", 3)
+    enable_cache: bool = _env_bool("GENMINI_ENABLE_CACHE", "1")
+    cache_ttl_hours: int = _safe_int_env("GENMINI_CACHE_TTL_HOURS", 168)  # 7 days
+    skip_existing_analysis: bool = _env_bool("GENMINI_SKIP_EXISTING", "1")
+
     verbose: bool = _env_bool("GENMINI_VERBOSE", "1")
 
 
@@ -140,6 +148,76 @@ CFG = Cfg()
 def _vinfo(msg: str, *args: Any) -> None:
     if CFG.verbose:
         LOG.info(msg, *args)
+
+
+# ============== CACHING SYSTEM ==============
+
+CACHE_DIR = ROOT_DIR / "data" / ".cache" / "analysis_results"
+
+
+def _get_video_hash(video_url: str, keyword: str) -> str:
+    """Generate unique hash for video+keyword combination"""
+    key = f"{video_url}|{keyword}|v2"
+    return hashlib.md5(key.encode()).hexdigest()[:16]
+
+
+def _get_cache_path(video_url: str, keyword: str) -> Path:
+    """Get cache file path for video analysis result"""
+    cache_hash = _get_video_hash(video_url, keyword)
+    return CACHE_DIR / f"{cache_hash}.json"
+
+
+def _is_cache_valid(cache_path: Path) -> bool:
+    """Check if cache is still valid (not expired)"""
+    if not cache_path.exists():
+        return False
+    try:
+        mtime = cache_path.stat().st_mtime
+        age_hours = (time.time() - mtime) / 3600
+        return age_hours < CFG.cache_ttl_hours
+    except Exception:
+        return False
+
+
+def _load_from_cache(video_url: str, keyword: str) -> Optional[List[Dict[str, Any]]]:
+    """Load cached analysis result if valid"""
+    if not CFG.enable_cache:
+        return None
+
+    cache_path = _get_cache_path(video_url, keyword)
+    if not _is_cache_valid(cache_path):
+        return None
+
+    try:
+        data = json.loads(cache_path.read_text(encoding="utf-8"))
+        _vinfo("[CACHE] Hit for %s", keyword)
+        return data.get("segments", [])
+    except Exception as e:
+        LOG.warning("[CACHE] Read error: %s", e)
+        return None
+
+
+def _save_to_cache(video_url: str, keyword: str, segments: List[Dict[str, Any]]) -> None:
+    """Save analysis result to cache"""
+    if not CFG.enable_cache:
+        return
+
+    try:
+        CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        cache_path = _get_cache_path(video_url, keyword)
+        cache_data = {
+            "video_url": video_url,
+            "keyword": keyword,
+            "segments": segments,
+            "cached_at": time.time(),
+        }
+        cache_path.write_text(json.dumps(cache_data, ensure_ascii=False), encoding="utf-8")
+        _vinfo("[CACHE] Saved result for %s", keyword)
+    except Exception as e:
+        LOG.warning("[CACHE] Write error: %s", e)
+
+
+# ============== END CACHING ==============
 
 
 def _ensure_gemini_setup() -> None:
@@ -501,6 +579,13 @@ JSON only. Provide concise notes. Provide dedupe_group for near-duplicates.
 
 def analyze_video_production_standard(video_url: str, keyword: str, max_segments: int = 8) -> List[Dict[str, Any]]:
     keyword = _clean_keyword_line(keyword)
+
+    # Check cache first
+    cached_result = _load_from_cache(video_url, keyword)
+    if cached_result is not None:
+        _vinfo("[CACHE] Using cached analysis for '%s'", keyword)
+        return cached_result
+
     vid_id = re.sub(r"\W+", "_", video_url.split("v=")[-1] if "v=" in video_url else video_url)[-40:]
     cache_dir = ROOT_DIR / "data" / ".cache" / "analysis_videos" / vid_id
 
@@ -583,6 +668,11 @@ def analyze_video_production_standard(video_url: str, keyword: str, max_segments
                 continue
 
     final_segments.sort(key=lambda x: float(x["start_sec"]))
+
+    # Save to cache for future use
+    if final_segments:
+        _save_to_cache(video_url, keyword, final_segments)
+
     return final_segments
 
 
@@ -598,73 +688,129 @@ def _seg_score(seg: Dict[str, Any]) -> float:
     return conf * 1000.0 + dur
 
 
+def _analyze_single_video(args: Tuple[str, str, int, int, int]) -> Dict[str, Any]:
+    """Helper function for parallel video analysis"""
+    url, keyword, max_segments, global_idx, idx_in_kw = args
+    try:
+        segs = analyze_video_production_standard(url, keyword, max_segments)
+        return {
+            "success": True,
+            "url": url,
+            "keyword": keyword,
+            "global_idx": global_idx,
+            "idx_in_kw": idx_in_kw,
+            "segments": segs,
+        }
+    except Exception as e:
+        LOG.error("Error analyzing %s: %s", url, e)
+        return {
+            "success": False,
+            "url": url,
+            "keyword": keyword,
+            "global_idx": global_idx,
+            "idx_in_kw": idx_in_kw,
+            "segments": [],
+            "error": str(e),
+        }
+
+
 def run_genmini_project(dl_links_path: str, segments_path: str, max_segments: int = 8):
     _ensure_logging_ready()
     groups = read_dl_links(dl_links_path)
 
     all_results: List[Dict[str, Any]] = []
     video_map: List[Dict[str, Any]] = []
-    global_idx = 0
 
     seen_by_kw: Dict[str, List[str]] = {}
 
+    # Build task list for parallel processing
+    tasks: List[Tuple[str, str, int, int, int]] = []
+    global_idx = 0
+
     for keyword, urls in groups.items():
         kw_clean = _clean_keyword_line(keyword.replace("Group_", "").replace("_", " ").strip())
-        LOG.info("Processing: %s (%d videos)", kw_clean, len(urls))
-
         for idx, url in enumerate(urls):
-            try:
-                segs = analyze_video_production_standard(url, kw_clean, max_segments)
-                original = list(segs)
-
-                if CFG.cross_video_dedupe and segs:
-                    kept = []
-                    for s in segs:
-                        sig = _norm_text((s.get("reason", "") or "") + " " + (s.get("type", "") or ""))
-                        dup = False
-                        for old in seen_by_kw.get(kw_clean, []):
-                            if _jaccard_tokens(sig, old) >= CFG.cross_video_text_sim_thr:
-                                dup = True
-                                break
-                        if not dup:
-                            kept.append(s)
-                            seen_by_kw.setdefault(kw_clean, []).append(sig)
-                    segs = kept
-
-                if (not segs) and original:
-                    segs = original[:1]
-
-                video_map.append(
-                    {
-                        "video_global_index": global_idx,
-                        "keyword": kw_clean,
-                        "video_url": url,
-                        "video_index_in_keyword": idx,
-                        "found_clips": len(segs),
-                    }
-                )
-
-                if segs:
-                    all_results.append(
-                        {
-                            "keyword": kw_clean,
-                            "video_url": url,
-                            "video_global_index": global_idx,
-                            "video_index": idx,
-                            "segments": segs,
-                        }
-                    )
-                    _vinfo(" -> Found %d valid clips.", len(segs))
-                else:
-                    _vinfo(" -> No valid clips found.")
-
-            except Exception as e:
-                LOG.error("Error %s: %s", url, e)
-
+            tasks.append((url, kw_clean, max_segments, global_idx, idx))
             global_idx += 1
+
+    total_videos = len(tasks)
+    LOG.info("Starting analysis of %d videos with %d parallel workers", total_videos, CFG.parallel_workers)
+
+    # Process videos in parallel
+    results_by_idx: Dict[int, Dict[str, Any]] = {}
+
+    if CFG.parallel_workers > 1 and total_videos > 1:
+        # Parallel processing
+        with ThreadPoolExecutor(max_workers=CFG.parallel_workers) as executor:
+            future_to_task = {executor.submit(_analyze_single_video, task): task for task in tasks}
+
+            completed = 0
+            for future in as_completed(future_to_task):
+                result = future.result()
+                results_by_idx[result["global_idx"]] = result
+                completed += 1
+                _vinfo("[PROGRESS] %d/%d videos analyzed", completed, total_videos)
+    else:
+        # Sequential processing (fallback)
+        for i, task in enumerate(tasks):
+            result = _analyze_single_video(task)
+            results_by_idx[result["global_idx"]] = result
+            _vinfo("[PROGRESS] %d/%d videos analyzed", i + 1, total_videos)
+
+    # Process results in order and apply deduplication
+    for global_idx in sorted(results_by_idx.keys()):
+        result = results_by_idx[global_idx]
+        kw_clean = result["keyword"]
+        url = result["url"]
+        idx = result["idx_in_kw"]
+        segs = result["segments"]
+        original = list(segs)
+
+        if CFG.cross_video_dedupe and segs:
+            kept = []
+            for s in segs:
+                sig = _norm_text((s.get("reason", "") or "") + " " + (s.get("type", "") or ""))
+                dup = False
+                for old in seen_by_kw.get(kw_clean, []):
+                    if _jaccard_tokens(sig, old) >= CFG.cross_video_text_sim_thr:
+                        dup = True
+                        break
+                if not dup:
+                    kept.append(s)
+                    seen_by_kw.setdefault(kw_clean, []).append(sig)
+            segs = kept
+
+        if (not segs) and original:
+            segs = original[:1]
+
+        video_map.append(
+            {
+                "video_global_index": global_idx,
+                "keyword": kw_clean,
+                "video_url": url,
+                "video_index_in_keyword": idx,
+                "found_clips": len(segs),
+            }
+        )
+
+        if segs:
+            all_results.append(
+                {
+                    "keyword": kw_clean,
+                    "video_url": url,
+                    "video_global_index": global_idx,
+                    "video_index": idx,
+                    "segments": segs,
+                }
+            )
+            _vinfo(" -> %s: Found %d valid clips.", kw_clean, len(segs))
+        else:
+            _vinfo(" -> %s: No valid clips found.", kw_clean)
 
     Path(segments_path).write_text(json.dumps(all_results, indent=2, ensure_ascii=False), encoding="utf-8")
     Path(segments_path).with_name("video_map.json").write_text(json.dumps(video_map, indent=2, ensure_ascii=False), encoding="utf-8")
+
+    LOG.info("Analysis complete: %d videos processed, %d with valid clips", total_videos, len(all_results))
     return all_results
 
 

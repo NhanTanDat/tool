@@ -39,7 +39,8 @@ class VideoSceneMatcher:
 
         if HAS_GEMINI and self.gemini_api_key:
             genai.configure(api_key=self.gemini_api_key)
-            self.model = genai.GenerativeModel("gemini-1.5-flash")
+            # Use gemini-2.0-flash (gemini-1.5-flash is deprecated)
+            self.model = genai.GenerativeModel("gemini-2.0-flash")
             self.use_ai = True
             print("[VideoSceneMatcher] Gemini AI enabled")
         else:

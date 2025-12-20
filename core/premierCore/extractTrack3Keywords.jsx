@@ -412,13 +412,60 @@ function extractFromMarkers(sequence) {
     }
 
     log('Reading Sequence Markers...');
-    log('Number of markers: ' + markers.numMarkers);
 
     var keywords = [];
+    var markerIndex = 0;
 
-    for (var i = 0; i < markers.numMarkers; i++) {
-        var marker = markers[i];
+    // Method 1: Try numMarkers property (older API)
+    if (typeof markers.numMarkers !== 'undefined') {
+        log('Using numMarkers method: ' + markers.numMarkers + ' markers');
+        for (var i = 0; i < markers.numMarkers; i++) {
+            var marker = markers[i];
+            if (marker) {
+                processMarker(marker, markerIndex++, keywords);
+            }
+        }
+    }
+    // Method 2: Try getFirstMarker/getNextMarker (newer API)
+    else if (typeof markers.getFirstMarker === 'function') {
+        log('Using getFirstMarker/getNextMarker method');
+        var marker = markers.getFirstMarker();
+        while (marker) {
+            processMarker(marker, markerIndex++, keywords);
+            marker = markers.getNextMarker(marker);
+        }
+    }
+    // Method 3: Try direct iteration
+    else {
+        log('Trying direct iteration...');
+        try {
+            for (var j = 0; j < 1000; j++) { // Safety limit
+                var m = markers[j];
+                if (!m) break;
+                processMarker(m, markerIndex++, keywords);
+            }
+        } catch (e) {
+            log('Direct iteration failed: ' + e);
+        }
+    }
 
+    log('\nFound ' + keywords.length + ' keywords from markers');
+
+    if (keywords.length === 0) {
+        log('WARNING: No markers found. Make sure you have created markers on the sequence (not clip markers).');
+        log('To create sequence markers: Position playhead -> Press M -> Double-click marker -> Enter name');
+    }
+
+    return keywords;
+}
+
+/**
+ * Process a single marker and add to keywords array
+ */
+function processMarker(marker, index, keywords) {
+    if (!marker) return;
+
+    try {
         // Get marker properties
         var markerName = marker.name || '';
         var markerComment = marker.comments || '';
@@ -431,8 +478,8 @@ function extractFromMarkers(sequence) {
 
         // Skip empty markers
         if (!keyword || keyword.length === 0) {
-            log('WARN: Marker ' + i + ' has no name/comment, skip');
-            continue;
+            log('WARN: Marker ' + index + ' has no name/comment, skip');
+            return;
         }
 
         // Get timing
@@ -451,10 +498,10 @@ function extractFromMarkers(sequence) {
         var startTC = secondsToTimecode(startSec);
         var endTC = secondsToTimecode(endSec);
 
-        log('Marker ' + i + ': "' + keyword + '" | ' + startTC + ' -> ' + endTC + ' (' + durationSec.toFixed(2) + 's)');
+        log('Marker ' + index + ': "' + keyword + '" | ' + startTC + ' -> ' + endTC + ' (' + durationSec.toFixed(2) + 's)');
 
         keywords.push({
-            index: i,
+            index: index,
             keyword: keyword,
             start_seconds: startSec,
             end_seconds: endSec,
@@ -462,10 +509,9 @@ function extractFromMarkers(sequence) {
             start_timecode: startTC,
             end_timecode: endTC
         });
+    } catch (e) {
+        log('ERROR processing marker ' + index + ': ' + e);
     }
-
-    log('\nFound ' + keywords.length + ' keywords from markers');
-    return keywords;
 }
 
 /**

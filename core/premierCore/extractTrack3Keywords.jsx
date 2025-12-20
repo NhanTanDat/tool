@@ -541,9 +541,27 @@ function processMarker(marker, index, keywords) {
             return;
         }
 
-        // Get timing
-        var startTicks = marker.start.ticks;
-        var endTicks = marker.end.ticks;
+        // Get timing - handle different marker API versions
+        var startTicks = 0;
+        var endTicks = 0;
+
+        // Try different ways to get start time
+        if (marker.start && marker.start.ticks) {
+            startTicks = marker.start.ticks;
+        } else if (typeof marker.start === 'number') {
+            startTicks = marker.start;
+        } else if (typeof marker.inPoint !== 'undefined') {
+            startTicks = marker.inPoint.ticks || marker.inPoint;
+        }
+
+        // Try different ways to get end time
+        if (marker.end && marker.end.ticks) {
+            endTicks = marker.end.ticks;
+        } else if (typeof marker.end === 'number') {
+            endTicks = marker.end;
+        } else if (typeof marker.outPoint !== 'undefined') {
+            endTicks = marker.outPoint.ticks || marker.outPoint;
+        }
 
         var startSec = ticksToSeconds(startTicks);
         var endSec = ticksToSeconds(endTicks);
@@ -745,6 +763,19 @@ function exportKeywordsToJSON(keywords, outputPath) {
         jsonObj.keywords.push(keywords[i]);
     }
 
+    // Helper function to safely format number for JSON
+    function safeNum(v) {
+        if (typeof v === 'undefined' || v === null || isNaN(v)) return '0';
+        if (!isFinite(v)) return '0';
+        return String(v);
+    }
+
+    // Helper function to escape string for JSON
+    function safeStr(s) {
+        if (!s) return '';
+        return String(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n').replace(/\r/g, '\\r');
+    }
+
     // Manual JSON stringify (ExtendScript không có JSON.stringify)
     var jsonStr = '{\n';
     jsonStr += '  "version": "' + jsonObj.version + '",\n';
@@ -754,13 +785,13 @@ function exportKeywordsToJSON(keywords, outputPath) {
     for (var i = 0; i < keywords.length; i++) {
         var kw = keywords[i];
         jsonStr += '    {\n';
-        jsonStr += '      "index": ' + kw.index + ',\n';
-        jsonStr += '      "keyword": "' + kw.keyword.replace(/"/g, '\\"') + '",\n';
-        jsonStr += '      "start_seconds": ' + kw.start_seconds + ',\n';
-        jsonStr += '      "end_seconds": ' + kw.end_seconds + ',\n';
-        jsonStr += '      "duration_seconds": ' + kw.duration_seconds + ',\n';
-        jsonStr += '      "start_timecode": "' + kw.start_timecode + '",\n';
-        jsonStr += '      "end_timecode": "' + kw.end_timecode + '"\n';
+        jsonStr += '      "index": ' + safeNum(kw.index) + ',\n';
+        jsonStr += '      "keyword": "' + safeStr(kw.keyword) + '",\n';
+        jsonStr += '      "start_seconds": ' + safeNum(kw.start_seconds) + ',\n';
+        jsonStr += '      "end_seconds": ' + safeNum(kw.end_seconds) + ',\n';
+        jsonStr += '      "duration_seconds": ' + safeNum(kw.duration_seconds) + ',\n';
+        jsonStr += '      "start_timecode": "' + safeStr(kw.start_timecode) + '",\n';
+        jsonStr += '      "end_timecode": "' + safeStr(kw.end_timecode) + '"\n';
         jsonStr += '    }';
         if (i < keywords.length - 1) jsonStr += ',';
         jsonStr += '\n';

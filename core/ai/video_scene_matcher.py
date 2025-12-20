@@ -273,7 +273,8 @@ def load_keywords_from_json(json_path: str) -> List[Dict[str, Any]]:
     """
     Load keywords từ file JSON được export từ extractTrack3Keywords.jsx
     """
-    with open(json_path, "r", encoding="utf-8") as f:
+    # Use utf-8-sig to automatically handle UTF-8 BOM from ExtendScript
+    with open(json_path, "r", encoding="utf-8-sig") as f:
         data = json.load(f)
     return data.get("keywords", [])
 

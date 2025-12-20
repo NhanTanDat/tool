@@ -367,9 +367,16 @@ function getClipText(clipItem) {
 
 // ============== CONFIGURATION ==============
 // Enable debug mode to see clip structure (set to true for debugging)
-var DEBUG_MODE = true;
+var DEBUG_MODE = false;
 // Debug only first N clips (set to 0 for all)
 var DEBUG_LIMIT = 3;
+
+// ===== SOURCE MODE =====
+// Choose where to read keywords from:
+// 'track3'   - Read from clips on Track 3 (Essential Graphics - limited)
+// 'markers'  - Read from Sequence Markers (RECOMMENDED - full text access)
+// 'captions' - Read from Captions track
+var KEYWORD_SOURCE = 'markers';
 
 // WORKAROUND: If true, use clip NAME as keyword (rename clips in timeline to keywords)
 var USE_CLIP_NAME_AS_KEYWORD = true;
@@ -377,6 +384,157 @@ var USE_CLIP_NAME_AS_KEYWORD = true;
 // Alternative: Read keywords from external file (one keyword per line, matching clip order)
 // Set to empty string to disable
 var EXTERNAL_KEYWORDS_FILE = ''; // e.g., 'keywords_list.txt'
+
+/**
+ * ============== EXTRACT FROM SEQUENCE MARKERS ==============
+ * Đọc keywords từ Sequence Markers
+ * Mỗi marker = 1 keyword, với:
+ *   - Marker Name = keyword text
+ *   - Marker Duration = thời lượng clip
+ *
+ * Cách tạo marker trong Premiere:
+ *   1. Đặt playhead tại vị trí muốn đánh dấu
+ *   2. Nhấn M để tạo marker
+ *   3. Double-click marker để edit
+ *   4. Nhập keyword vào Name field
+ *   5. Set Duration nếu cần
+ */
+function extractFromMarkers(sequence) {
+    if (!sequence) {
+        log('ERROR: No sequence provided');
+        return [];
+    }
+
+    var markers = sequence.markers;
+    if (!markers) {
+        log('ERROR: Cannot access sequence markers');
+        return [];
+    }
+
+    log('Reading Sequence Markers...');
+    log('Number of markers: ' + markers.numMarkers);
+
+    var keywords = [];
+
+    for (var i = 0; i < markers.numMarkers; i++) {
+        var marker = markers[i];
+
+        // Get marker properties
+        var markerName = marker.name || '';
+        var markerComment = marker.comments || '';
+
+        // Use name first, fall back to comment
+        var keyword = markerName.replace(/^\s+|\s+$/g, '');
+        if (!keyword || keyword.length === 0) {
+            keyword = markerComment.replace(/^\s+|\s+$/g, '');
+        }
+
+        // Skip empty markers
+        if (!keyword || keyword.length === 0) {
+            log('WARN: Marker ' + i + ' has no name/comment, skip');
+            continue;
+        }
+
+        // Get timing
+        var startTicks = marker.start.ticks;
+        var endTicks = marker.end.ticks;
+
+        var startSec = ticksToSeconds(startTicks);
+        var endSec = ticksToSeconds(endTicks);
+
+        // If marker has no duration, use default (5 seconds)
+        if (endSec <= startSec) {
+            endSec = startSec + 5.0;
+        }
+
+        var durationSec = endSec - startSec;
+        var startTC = secondsToTimecode(startSec);
+        var endTC = secondsToTimecode(endSec);
+
+        log('Marker ' + i + ': "' + keyword + '" | ' + startTC + ' -> ' + endTC + ' (' + durationSec.toFixed(2) + 's)');
+
+        keywords.push({
+            index: i,
+            keyword: keyword,
+            start_seconds: startSec,
+            end_seconds: endSec,
+            duration_seconds: durationSec,
+            start_timecode: startTC,
+            end_timecode: endTC
+        });
+    }
+
+    log('\nFound ' + keywords.length + ' keywords from markers');
+    return keywords;
+}
+
+/**
+ * ============== EXTRACT FROM CAPTIONS ==============
+ * Đọc keywords từ Captions track (nếu có)
+ */
+function extractFromCaptions(sequence) {
+    if (!sequence) {
+        log('ERROR: No sequence provided');
+        return [];
+    }
+
+    // Try to access captions
+    var captionTracks = null;
+    try {
+        captionTracks = sequence.captionTracks;
+    } catch (e) {
+        log('ERROR: Cannot access caption tracks: ' + e);
+        return [];
+    }
+
+    if (!captionTracks || captionTracks.numTracks === 0) {
+        log('ERROR: No caption tracks found');
+        return [];
+    }
+
+    log('Reading Caption Tracks...');
+    log('Number of caption tracks: ' + captionTracks.numTracks);
+
+    var keywords = [];
+
+    // Read from first caption track
+    var track = captionTracks[0];
+    if (track && track.clips) {
+        for (var i = 0; i < track.clips.numItems; i++) {
+            var clip = track.clips[i];
+
+            // Get caption text
+            var text = '';
+            try {
+                text = clip.name || '';
+                // Try to get actual caption content
+                if (clip.projectItem && clip.projectItem.name) {
+                    text = clip.projectItem.name;
+                }
+            } catch (e) {}
+
+            text = text.replace(/^\s+|\s+$/g, '');
+            if (!text || text.length === 0) continue;
+
+            var startSec = ticksToSeconds(clip.start.ticks);
+            var endSec = ticksToSeconds(clip.end.ticks);
+            var durationSec = endSec - startSec;
+
+            keywords.push({
+                index: i,
+                keyword: text,
+                start_seconds: startSec,
+                end_seconds: endSec,
+                duration_seconds: durationSec,
+                start_timecode: secondsToTimecode(startSec),
+                end_timecode: secondsToTimecode(endSec)
+            });
+        }
+    }
+
+    log('\nFound ' + keywords.length + ' keywords from captions');
+    return keywords;
+}
 
 /**
  * Đọc tất cả clips từ Track 3 (Video Track 3)
@@ -532,7 +690,8 @@ function exportKeywordsToCSV(keywords, outputPath) {
  * Main function
  */
 function main() {
-    log('=== START EXTRACT TRACK 3 KEYWORDS ===');
+    log('=== START EXTRACT KEYWORDS ===');
+    log('Source mode: ' + KEYWORD_SOURCE);
 
     // Đọc config
     var cfg = readPathConfig();
@@ -561,15 +720,42 @@ function main() {
 
     log('Active sequence: ' + seq.name);
 
-    // Extract keywords từ Track 3
-    var keywords = extractTrack3Keywords(seq);
+    // Extract keywords based on source mode
+    var keywords = [];
+    var sourceName = '';
+
+    switch (KEYWORD_SOURCE.toLowerCase()) {
+        case 'markers':
+            keywords = extractFromMarkers(seq);
+            sourceName = 'Sequence Markers';
+            break;
+
+        case 'captions':
+            keywords = extractFromCaptions(seq);
+            sourceName = 'Captions';
+            break;
+
+        case 'track3':
+        default:
+            keywords = extractTrack3Keywords(seq);
+            sourceName = 'Track 3';
+            break;
+    }
 
     if (keywords.length === 0) {
-        alert('WARNING: Không tìm thấy keywords nào trong Track 3');
+        var helpMsg = '';
+        if (KEYWORD_SOURCE === 'markers') {
+            helpMsg = '\n\nĐể sử dụng Markers:\n' +
+                      '1. Nhấn M để tạo marker\n' +
+                      '2. Double-click marker\n' +
+                      '3. Nhập keyword vào Name\n' +
+                      '4. Set Duration';
+        }
+        alert('WARNING: Không tìm thấy keywords nào từ ' + sourceName + helpMsg);
         return;
     }
 
-    log('Found ' + keywords.length + ' keywords');
+    log('Found ' + keywords.length + ' keywords from ' + sourceName);
 
     // Export ra JSON
     var jsonPath = joinPath(dataFolder, 'track3_keywords.json');
@@ -588,7 +774,7 @@ function main() {
     }
 
     log('=== DONE ===');
-    alert('Đã export ' + keywords.length + ' keywords từ Track 3\n\nJSON: ' + jsonPath + '\nCSV: ' + csvPath);
+    alert('Đã export ' + keywords.length + ' keywords từ ' + sourceName + '\n\nJSON: ' + jsonPath + '\nCSV: ' + csvPath);
 }
 
 // Run

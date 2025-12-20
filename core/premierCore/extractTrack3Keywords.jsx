@@ -412,12 +412,23 @@ function extractFromMarkers(sequence) {
     }
 
     log('Reading Sequence Markers...');
+    log('Markers object type: ' + typeof markers);
 
     var keywords = [];
     var markerIndex = 0;
+    var foundMethod = 'none';
 
-    // Method 1: Try numMarkers property (older API)
-    if (typeof markers.numMarkers !== 'undefined') {
+    // Debug: List all properties of markers object
+    log('Markers properties:');
+    for (var prop in markers) {
+        try {
+            log('  - ' + prop + ': ' + typeof markers[prop]);
+        } catch (e) {}
+    }
+
+    // Method 1: Premiere 2022+ uses numMarkers property
+    if (typeof markers.numMarkers !== 'undefined' && markers.numMarkers > 0) {
+        foundMethod = 'numMarkers';
         log('Using numMarkers method: ' + markers.numMarkers + ' markers');
         for (var i = 0; i < markers.numMarkers; i++) {
             var marker = markers[i];
@@ -426,34 +437,82 @@ function extractFromMarkers(sequence) {
             }
         }
     }
-    // Method 2: Try getFirstMarker/getNextMarker (newer API)
-    else if (typeof markers.getFirstMarker === 'function') {
-        log('Using getFirstMarker/getNextMarker method');
-        var marker = markers.getFirstMarker();
-        while (marker) {
-            processMarker(marker, markerIndex++, keywords);
-            marker = markers.getNextMarker(marker);
-        }
-    }
-    // Method 3: Try direct iteration
-    else {
-        log('Trying direct iteration...');
+
+    // Method 2: Try createMarker to check if markers exist, then iterate
+    if (keywords.length === 0 && typeof markers.createMarker === 'function') {
+        foundMethod = 'iteration with createMarker check';
+        log('Trying iteration (createMarker exists)...');
         try {
-            for (var j = 0; j < 1000; j++) { // Safety limit
-                var m = markers[j];
-                if (!m) break;
+            // Try to access markers by index
+            for (var j = 0; j < 100; j++) {
+                var m = null;
+                try {
+                    m = markers[j];
+                } catch (e) {
+                    break;
+                }
+                if (!m || typeof m === 'undefined') break;
                 processMarker(m, markerIndex++, keywords);
             }
         } catch (e) {
-            log('Direct iteration failed: ' + e);
+            log('Iteration failed: ' + e);
         }
     }
 
-    log('\nFound ' + keywords.length + ' keywords from markers');
+    // Method 3: Try getFirstMarker/getNextMarker (some versions)
+    if (keywords.length === 0 && typeof markers.getFirstMarker === 'function') {
+        foundMethod = 'getFirstMarker';
+        log('Using getFirstMarker/getNextMarker method');
+        try {
+            var marker = markers.getFirstMarker();
+            while (marker) {
+                processMarker(marker, markerIndex++, keywords);
+                marker = markers.getNextMarker(marker);
+            }
+        } catch (e) {
+            log('getFirstMarker failed: ' + e);
+        }
+    }
+
+    // Method 4: For Premiere 2022 - try accessing via app.project.activeSequence.markers
+    if (keywords.length === 0) {
+        foundMethod = 'app.project.activeSequence.markers';
+        log('Trying app.project.activeSequence.markers...');
+        try {
+            var seqMarkers = app.project.activeSequence.markers;
+            if (seqMarkers) {
+                log('seqMarkers.numMarkers: ' + seqMarkers.numMarkers);
+                for (var k = 0; k < seqMarkers.numMarkers; k++) {
+                    var sm = seqMarkers[k];
+                    if (sm) {
+                        processMarker(sm, markerIndex++, keywords);
+                    }
+                }
+            }
+        } catch (e) {
+            log('app.project method failed: ' + e);
+        }
+    }
+
+    log('\nMethod used: ' + foundMethod);
+    log('Found ' + keywords.length + ' keywords from markers');
 
     if (keywords.length === 0) {
-        log('WARNING: No markers found. Make sure you have created markers on the sequence (not clip markers).');
-        log('To create sequence markers: Position playhead -> Press M -> Double-click marker -> Enter name');
+        log('');
+        log('========================================');
+        log('WARNING: No markers found!');
+        log('');
+        log('For Premiere Pro 2022:');
+        log('1. Click on empty area in timeline (deselect all)');
+        log('2. Move playhead to desired position');
+        log('3. Press M to create a SEQUENCE marker');
+        log('4. Double-click the marker (yellow icon on ruler)');
+        log('5. Enter keyword in the "Name" field');
+        log('6. Set Duration if needed');
+        log('');
+        log('NOTE: Clip markers (on clips) are different from');
+        log('      Sequence markers (on the timeline ruler)');
+        log('========================================');
     }
 
     return keywords;

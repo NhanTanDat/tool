@@ -836,6 +836,11 @@ class AutoToolGUI(tk.Tk):
             text="🤖  AI Auto V4",
             command=self.run_ai_v4_workflow,
         ).pack(side="left", padx=(0, 6))
+        ttk.Button(
+            action_row,
+            text="📝  Đọc Markers",
+            command=self.run_read_markers,
+        ).pack(side="left", padx=(0, 6))
         ttk.Button(action_row, text="🧹  Xoá log", command=self.clear_log2).pack(
             side="left", padx=4
         )
@@ -1274,6 +1279,85 @@ Nhấn OK để tiếp tục...
             messagebox.showerror("Lỗi", f"Lỗi khi chạy workflow:\n{e}")
 
         self.log2("=== KẾT THÚC AI AUTO V4 WORKFLOW ===")
+
+    # =================================================================
+    # Đọc Markers - Chạy riêng step đọc markers từ timeline
+    # =================================================================
+    def run_read_markers(self):
+        """
+        Chạy script readMarkers.jsx để đọc markers từ timeline đang mở.
+        Xuất ra file markers.json trong data folder.
+        """
+        if not self.premier_projects:
+            messagebox.showwarning("Đọc Markers", "Chưa có file .prproj nào trong danh sách.")
+            return
+
+        proj_path = self.premier_projects[0]
+        self.log2("=== ĐỌC MARKERS TỪ TIMELINE ===")
+        self.log2(f"Project: {proj_path}")
+
+        # Setup paths
+        project_slug = self._derive_project_slug(proj_path)
+        data_folder = os.path.join(DATA_DIR, project_slug)
+        resource_dir = os.path.join(os.path.dirname(proj_path), 'resource')
+
+        # Ensure data folder exists
+        os.makedirs(data_folder, exist_ok=True)
+
+        # Write path.txt config
+        path_txt_content = (
+            f"project_slug={project_slug}\n"
+            f"data_folder={data_folder.replace(chr(92), '/')}\n"
+            f"project_path={proj_path.replace(chr(92), '/')}\n"
+            f"resource_folder={resource_dir.replace(chr(92), '/')}\n"
+        )
+        path_txt_path = os.path.join(DATA_DIR, 'path.txt')
+        try:
+            with open(path_txt_path, 'w', encoding='utf-8') as f:
+                f.write(path_txt_content)
+            self.log2(f"✓ Đã cập nhật path.txt")
+        except Exception as e:
+            self.log2(f"LỖI khi ghi path.txt: {e}")
+            return
+
+        # Get JSX script path
+        jsx_script = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            'core', 'premierCore', 'readMarkers.jsx'
+        )
+
+        if not os.path.exists(jsx_script):
+            # Fallback to extractTrack3Keywords.jsx
+            jsx_script = os.path.join(
+                os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                'core', 'premierCore', 'extractTrack3Keywords.jsx'
+            )
+
+        self.log2(f"\n📝 CHẠY SCRIPT TRONG PREMIERE PRO:")
+        self.log2(f"   {jsx_script}")
+        self.log2("")
+        self.log2("Cách chạy:")
+        self.log2("1. Mở Premiere Pro với project đang mở")
+        self.log2("2. Mở file .jsx trong VS Code")
+        self.log2("3. Nhấn F5 để chạy (cần ExtendScript Debugger)")
+        self.log2("")
+        self.log2(f"Output sẽ được lưu tại:")
+        self.log2(f"   {os.path.join(data_folder, 'markers.json')}")
+
+        # Copy path to clipboard
+        try:
+            self.clipboard_clear()
+            self.clipboard_append(jsx_script)
+            self.log2("\n✓ Đã copy đường dẫn script vào clipboard!")
+        except Exception:
+            pass
+
+        # Show dialog
+        messagebox.showinfo(
+            "Đọc Markers",
+            f"Chạy script sau trong Premiere Pro:\n\n{jsx_script}\n\n"
+            f"(Đường dẫn đã được copy vào clipboard)"
+        )
 
     # =================================================================
     # Download images (nếu chỉ muốn tải ảnh)

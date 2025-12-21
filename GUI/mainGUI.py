@@ -715,6 +715,11 @@ class AutoToolGUI(tk.Tk):
         ttk.Button(btn_frame, text="🧹  Xoá log", command=self.clear_log).pack(
             side="left", padx=6
         )
+        ttk.Button(
+            btn_frame,
+            text="🚀  Download & Match",
+            command=self.run_marker_workflow,
+        ).pack(side="left", padx=6)
 
         # PROGRESS + LOG
         # Progress
@@ -840,11 +845,6 @@ class AutoToolGUI(tk.Tk):
             action_row,
             text="📝  Đọc Markers",
             command=self.run_read_markers,
-        ).pack(side="left", padx=(0, 6))
-        ttk.Button(
-            action_row,
-            text="🚀  Download & Match",
-            command=self.run_marker_workflow,
         ).pack(side="left", padx=(0, 6))
         ttk.Button(action_row, text="🧹  Xoá log", command=self.clear_log2).pack(
             side="left", padx=4
@@ -1388,13 +1388,18 @@ Nhấn OK để tiếp tục...
         3. AI phân tích và match
         4. Sinh timeline / cut list
         """
-        if not self.premier_projects:
+        # Ưu tiên batch_projects (Download tab), fallback sang premier_projects
+        projects = self.batch_projects or self.premier_projects
+        if not projects:
             messagebox.showwarning("Marker Workflow", "Chưa có file .prproj nào.")
             return
 
-        proj_path = self.premier_projects[0]
-        self.log2("=== BẮT ĐẦU MARKER-BASED WORKFLOW ===")
-        self.log2(f"Project: {proj_path}")
+        proj_path = projects[0]
+
+        # Dùng log phù hợp với tab hiện tại
+        log_func = self.log if self.active_tab.get() == 0 else self.log2
+        log_func("=== BẮT ĐẦU MARKER-BASED WORKFLOW ===")
+        log_func(f"Project: {proj_path}")
 
         # Setup paths
         project_slug = self._derive_project_slug(proj_path)
@@ -1408,8 +1413,8 @@ Nhấn OK để tiếp tục...
         # Check if keywords file exists
         keywords_file = os.path.join(data_folder, 'track3_keywords.json')
         if not os.path.exists(keywords_file):
-            self.log2(f"❌ Không tìm thấy: {keywords_file}")
-            self.log2("   Hãy chạy 'Đọc Markers' trước!")
+            log_func(f"❌ Không tìm thấy: {keywords_file}")
+            log_func("   Hãy chạy 'Đọc Markers' trước!")
             messagebox.showwarning(
                 "Thiếu Keywords",
                 "Chưa có file track3_keywords.json!\n\n"
@@ -1421,7 +1426,7 @@ Nhấn OK để tiếp tục...
         try:
             from core.ai.marker_based_workflow import MarkerBasedWorkflow
         except Exception as e:
-            self.log2(f"❌ Không import được workflow: {e}")
+            log_func(f"❌ Không import được workflow: {e}")
             messagebox.showerror("Lỗi", f"Không import được module:\n{e}")
             return
 
@@ -1444,7 +1449,7 @@ Nhấn OK để tiếp tục...
             data_folder=data_folder,
             resource_folder=resource_dir,
             videos_per_keyword=vpk,
-            log_callback=self.log2,
+            log_callback=log_func,
         )
 
         # Run in thread to not block GUI
@@ -1454,21 +1459,21 @@ Nhấn OK để tiếp tục...
             try:
                 success = workflow.run_full_workflow()
                 if success:
-                    self.log2("\n✓✓✓ WORKFLOW HOÀN THÀNH ✓✓✓")
-                    self.log2("\nBước tiếp theo:")
-                    self.log2("   Chạy 'Chạy Auto Premier' hoặc executeCuts.jsx")
+                    log_func("\n✓✓✓ WORKFLOW HOÀN THÀNH ✓✓✓")
+                    log_func("\nBước tiếp theo:")
+                    log_func("   Chạy 'Chạy Auto Premier' hoặc executeCuts.jsx")
                 else:
-                    self.log2("\n❌ WORKFLOW THẤT BẠI")
+                    log_func("\n❌ WORKFLOW THẤT BẠI")
             except Exception as e:
-                self.log2(f"\n❌ LỖI: {e}")
+                log_func(f"\n❌ LỖI: {e}")
 
-            self.log2("=== KẾT THÚC MARKER WORKFLOW ===")
+            log_func("=== KẾT THÚC MARKER WORKFLOW ===")
 
         thread = threading.Thread(target=run_workflow, daemon=True)
         thread.start()
 
-        self.log2("\n⏳ Đang chạy workflow trong background...")
-        self.log2("   (Xem log để theo dõi tiến trình)")
+        log_func("\n⏳ Đang chạy workflow trong background...")
+        log_func("   (Xem log để theo dõi tiến trình)")
 
     # =================================================================
     # Download images (nếu chỉ muốn tải ảnh)

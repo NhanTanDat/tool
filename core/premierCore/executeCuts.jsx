@@ -221,31 +221,24 @@ function insertClipToV4(sequence, projectItem, cut) {
         }
 
         var clipStartTicks = secondsToTicks(clipStartSec);
-        var clipEndTicks = secondsToTicks(clipEndSec);
-        var durationTicks = clipEndTicks - clipStartTicks;
+        var durationSec = clipEndSec - clipStartSec;
 
         log('    Timeline pos: ' + cut.timeline_start.toFixed(2) + 's');
         log('    Source range: ' + clipStartSec.toFixed(2) + 's - ' + clipEndSec.toFixed(2) + 's');
 
-        // Method 1: Use insertClip then adjust
-        var timelinePos = new Time();
-        timelinePos.ticks = timelineStartTicks;
-
-        v4.insertClip(projectItem, timelinePos);
+        // Use insertClip with ticks as string (more compatible)
+        var inserted = v4.insertClip(projectItem, timelineStartTicks.toString());
 
         // Get the inserted clip (should be the last one added)
         if (v4.clips.numItems > clipCountBefore) {
             var insertedClip = v4.clips[v4.clips.numItems - 1];
 
-            // Set source IN point (where to start in the source video)
-            var newInPoint = new Time();
-            newInPoint.ticks = clipStartTicks;
-            insertedClip.inPoint = newInPoint;
+            // Set source IN point using ticks string
+            insertedClip.inPoint = clipStartTicks.toString();
 
-            // Set clip END on timeline (start + duration)
-            var newEnd = new Time();
-            newEnd.ticks = insertedClip.start.ticks + durationTicks;
-            insertedClip.end = newEnd;
+            // Set clip END on timeline
+            var newEndTicks = insertedClip.start.ticks + secondsToTicks(durationSec);
+            insertedClip.end = newEndTicks.toString();
 
             log('    Clip placed: ' + (insertedClip.start.ticks / TICKS_PER_SECOND).toFixed(2) + 's - ' +
                 (insertedClip.end.ticks / TICKS_PER_SECOND).toFixed(2) + 's');

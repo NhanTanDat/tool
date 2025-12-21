@@ -216,20 +216,25 @@ function insertClipToV4(sequence, projectItem, cut) {
         var clipDuration = cut.duration || cut.timeline_duration || 5;
 
         var clipStartTicks = secondsToTicks(clipStartSec);
+        var durationTicks = secondsToTicks(clipDuration);
 
         // Use insertClip with ticks as string (more compatible)
-        var inserted = v4.insertClip(projectItem, timelineStartTicks.toString());
+        v4.insertClip(projectItem, timelineStartTicks.toString());
 
         // Get the inserted clip (should be the last one added)
         if (v4.clips.numItems > clipCountBefore) {
             var insertedClip = v4.clips[v4.clips.numItems - 1];
 
-            // Set source IN point using ticks string
+            // STEP 1: Set source IN point first (where to start in source video)
             insertedClip.inPoint = clipStartTicks.toString();
 
-            // Set clip END on timeline based on clip duration
-            var newEndTicks = insertedClip.start.ticks + secondsToTicks(clipDuration);
-            insertedClip.end = newEndTicks.toString();
+            // STEP 2: Set timeline END position
+            // This determines the clip duration on timeline
+            // The outPoint will be automatically calculated based on (end - start) + inPoint
+            var timelineEndTicks = timelineStartTicks + durationTicks;
+            insertedClip.end = timelineEndTicks.toString();
+
+            log('    Source IN: ' + clipStartSec.toFixed(2) + 's, Duration: ' + clipDuration.toFixed(2) + 's');
         }
 
         return true;

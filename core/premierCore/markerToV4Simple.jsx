@@ -330,8 +330,9 @@ function insertClipToV4(sequence, projectItem, timelineStart, timelineDuration) 
     var clipCountBefore = v4.clips.numItems;
 
     try {
+        var timelineStartTicks = secondsToTicks(timelineStart);
         var timelinePos = new Time();
-        timelinePos.ticks = secondsToTicks(timelineStart);
+        timelinePos.ticks = timelineStartTicks;
 
         // Insert clip at timeline position
         v4.insertClip(projectItem, timelinePos);
@@ -343,14 +344,18 @@ function insertClipToV4(sequence, projectItem, timelineStart, timelineDuration) 
         }
 
         if (insertedClip && timelineDuration > 0) {
-            // Trim clip to required duration
+            // Get source clip duration
             var clipDuration = ticksToSeconds(insertedClip.end.ticks - insertedClip.start.ticks);
 
+            // Use smaller of clip duration or required duration
+            var actualDuration = Math.min(clipDuration, timelineDuration);
+
+            // Set timeline END position to control duration
+            var newEnd = new Time();
+            newEnd.ticks = timelineStartTicks + secondsToTicks(actualDuration);
+            insertedClip.end = newEnd;
+
             if (clipDuration > timelineDuration) {
-                // Crop end to match duration
-                var newEnd = new Time();
-                newEnd.ticks = insertedClip.start.ticks + secondsToTicks(timelineDuration);
-                insertedClip.end = newEnd;
                 log('  Trimmed to ' + timelineDuration.toFixed(2) + 's');
             }
         }

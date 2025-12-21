@@ -362,52 +362,29 @@ function cutAndPushToV4(
             return true;
         }
 
-        // Set in/out point
+        // STEP 1: Set source IN point first
         var inPoint = new Time();
         inPoint.ticks = sceneStartTicks;
-
-        var outPoint = new Time();
-        outPoint.ticks = sceneEndTicks;
-
         insertedClip.inPoint = inPoint;
-        insertedClip.outPoint = outPoint;
 
-        // Smart duration fitting
-        var actualSceneDuration = sceneDuration;
-        var durationDiff = Math.abs(sceneDuration - timelineDuration);
-        var diffPercent = durationDiff / timelineDuration;
+        // STEP 2: Determine actual clip duration (use smaller of scene vs required)
+        var actualDuration = Math.min(sceneDuration, timelineDuration);
+        var actualDurationTicks = secondsToTicks(actualDuration);
 
-        if (diffPercent > 0.2) {
-            // Significant difference - need adjustment
-            if (sceneDuration > timelineDuration) {
-                // Scene too long → crop to fit
-                log('Cropping scene to fit (' + sceneDuration.toFixed(2) + 's -> ' + timelineDuration.toFixed(2) + 's)');
-                var newOutTicks = sceneStartTicks + requiredDurationTicks;
-                var newOut = new Time();
-                newOut.ticks = newOutTicks;
-                insertedClip.outPoint = newOut;
-            } else {
-                // Scene too short
-                var speedMultiplier = calculateOptimalSpeed(sceneDuration, timelineDuration);
+        // STEP 3: Set timeline END position
+        // This controls clip duration on timeline
+        var endPos = new Time();
+        endPos.ticks = timelineStartTicks + actualDurationTicks;
+        insertedClip.end = endPos;
 
-                if (speedMultiplier < 1.0) {
-                    // Slow down to extend duration
-                    log('Slowing scene ' + (speedMultiplier * 100).toFixed(0) + '% to extend duration');
-                    try {
-                        // Note: Speed adjustment via Premiere API
-                        // This may require using setSpeed() or adjusting playback rate
-                        // For now, we'll accept the shorter duration with a warning
-                        log('NOTE: Speed adjustment requires manual tweak or additional API');
-                    } catch (speedErr) {
-                        log('Speed adjustment not available: ' + speedErr);
-                    }
-                } else {
-                    log('Scene shorter than required (' + sceneDuration.toFixed(2) + 's vs ' + timelineDuration.toFixed(2) + 's)');
-                }
-            }
+        // Log info
+        if (sceneDuration < timelineDuration) {
+            log('Scene shorter than marker (' + sceneDuration.toFixed(2) + 's vs ' + timelineDuration.toFixed(2) + 's)');
+        } else if (sceneDuration > timelineDuration) {
+            log('Cropped scene to fit (' + sceneDuration.toFixed(2) + 's -> ' + timelineDuration.toFixed(2) + 's)');
         }
 
-        log('SUCCESS: Clip configured on V4');
+        log('SUCCESS: Clip configured on V4 (duration: ' + actualDuration.toFixed(2) + 's)');
         return true;
 
     } catch (e) {

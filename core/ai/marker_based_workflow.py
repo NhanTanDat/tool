@@ -254,8 +254,15 @@ class MarkerBasedWorkflow:
             return {}
 
         for kw_text, markers in keyword_groups.items():
-            count_needed = len(markers)
-            self.log(f"\n🔍 \"{kw_text}\" - cần {count_needed} segments")
+            # Calculate total duration needed for all markers of this keyword
+            total_duration = sum(m.get("duration_seconds", 5) for m in markers)
+            # Estimate segments needed (assuming avg 5s per segment) + buffer
+            avg_seg_duration = 5
+            segments_needed = int(total_duration / avg_seg_duration) + 5
+
+            self.log(f"\n🔍 \"{kw_text}\"")
+            self.log(f"   Markers: {len(markers)}, Tổng duration: {total_duration:.0f}s")
+            self.log(f"   Cần ~{segments_needed} segments để fill đầy")
 
             # Find videos in keyword folder
             kw_folder = self.resource_folder / kw_text.replace(" ", "_")
@@ -273,15 +280,18 @@ class MarkerBasedWorkflow:
 
             self.log(f"   Videos: {len(videos)}")
 
-            # Analyze each video to find segments
+            # Analyze each video to find MORE segments
             all_segments = []
+            # Request more segments per video to fill all markers
+            segs_per_video = max(10, segments_needed // max(1, len(videos[:self.videos_per_keyword])) + 3)
+
             for video in videos[:self.videos_per_keyword]:
                 try:
-                    self.log(f"   Analyzing: {video.name}...")
+                    self.log(f"   Analyzing: {video.name} (max {segs_per_video} segments)...")
                     segments = analyze_video_for_keyword(
                         video_path=str(video),
                         keyword=kw_text,
-                        max_segments=count_needed + 2,
+                        max_segments=segs_per_video,
                         api_key=self.gemini_api_key,
                     )
                     for seg in segments:

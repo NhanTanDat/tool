@@ -704,6 +704,12 @@ class AutoToolGUI(tk.Tk):
         ).pack(side="left", padx=6)
         ttk.Button(
             btn_frame,
+            text="🚀  Download & Match",
+            style="Accent.TButton",
+            command=self.run_marker_workflow,
+        ).pack(side="left", padx=6)
+        ttk.Button(
+            btn_frame,
             text="🔗  Trạng thái link",
             command=self.open_links_status_window,
         ).pack(side="left", padx=6)
@@ -715,11 +721,6 @@ class AutoToolGUI(tk.Tk):
         ttk.Button(btn_frame, text="🧹  Xoá log", command=self.clear_log).pack(
             side="left", padx=6
         )
-        ttk.Button(
-            btn_frame,
-            text="🚀  Download & Match",
-            command=self.run_marker_workflow,
-        ).pack(side="left", padx=6)
 
         # PROGRESS + LOG
         # Progress

@@ -303,7 +303,7 @@ class MarkerBasedWorkflow:
         keyword_segments: Dict[str, List[Dict]]
     ) -> bool:
         """
-        Bước 4: Sinh cut list - GHÉP NHIỀU CLIPS NHỎ để fill marker
+        Bước 4: Sinh cut list - GHÉP NHIỀU CLIPS NHỎ để fill marker (kít đầy)
         """
         self.log("\n" + "="*50)
         self.log("  BƯỚC 4: SINH CUT LIST (MULTI-CLIP)")
@@ -321,7 +321,6 @@ class MarkerBasedWorkflow:
         keywords = self.load_keywords()
 
         cuts = []
-        segment_usage = defaultdict(int)  # Track which segment index is used per keyword
 
         for kw in keywords:
             idx = kw.get("index", 0)
@@ -332,21 +331,21 @@ class MarkerBasedWorkflow:
 
             self.log(f"\n[{idx}] \"{kw_text}\" @ {kw.get('start_timecode', '')} ({marker_duration:.1f}s)")
 
-            # Get ALL segments for this keyword (not just one)
+            # Get ALL segments for this keyword
             segments = keyword_segments.get(kw_text, [])
 
-            # Build list of clips to fill this marker
+            # Build list of clips to fill this marker COMPLETELY
             marker_clips = []
             current_pos = timeline_start
             remaining_duration = marker_duration
-            seg_start_idx = segment_usage[kw_text]
+            seg_idx = 0  # Reset for each marker - can reuse segments
 
-            # First, try to fill with AI segments
-            while remaining_duration > 0.5 and seg_start_idx < len(segments):
-                seg = segments[seg_start_idx]
+            # Fill with AI segments (loop if needed)
+            while remaining_duration > 0.5 and segments:
+                seg = segments[seg_idx % len(segments)]  # Loop through segments
                 seg_duration = seg.get("end_time", 5) - seg.get("start_time", 0)
 
-                # Use this segment (clip duration = min of segment duration and remaining)
+                # Use this segment
                 clip_duration = min(seg_duration, remaining_duration)
 
                 marker_clips.append({
@@ -361,28 +360,30 @@ class MarkerBasedWorkflow:
 
                 current_pos += clip_duration
                 remaining_duration -= clip_duration
-                seg_start_idx += 1
-                segment_usage[kw_text] += 1
+                seg_idx += 1
 
-                self.log(f"   ✓ AI clip: {seg.get('start_time', 0):.1f}s-{seg.get('start_time', 0) + clip_duration:.1f}s ({clip_duration:.1f}s)")
+                # Limit to avoid infinite loop - max 20 clips per marker
+                if len(marker_clips) >= 20:
+                    break
 
-            # If still need more, use fallback videos
-            if remaining_duration > 0.5 and all_videos:
+            # If no AI segments, use fallback videos
+            if remaining_duration > 0.5 and not segments and all_videos:
                 kw_hash = hash(kw_text) % len(all_videos)
-                fallback_offset = 0
+                fallback_idx = 0
 
                 while remaining_duration > 0.5:
-                    video_idx = (kw_hash + len(marker_clips)) % len(all_videos)
+                    video_idx = (kw_hash + fallback_idx) % len(all_videos)
                     matched_video = all_videos[video_idx]
 
-                    # Use chunks from video
-                    clip_duration = min(10, remaining_duration)  # Max 10s per fallback clip
+                    # Use chunks from video (each chunk 5-10s)
+                    chunk_start = (fallback_idx * 5) % 60  # Cycle through first 60s of video
+                    clip_duration = min(10, remaining_duration)
 
                     marker_clips.append({
                         "video_path": str(matched_video),
                         "video_name": matched_video.name,
-                        "clip_start": fallback_offset,
-                        "clip_end": fallback_offset + clip_duration,
+                        "clip_start": chunk_start,
+                        "clip_end": chunk_start + clip_duration,
                         "timeline_pos": current_pos,
                         "duration": clip_duration,
                         "source": "fallback",
@@ -390,33 +391,26 @@ class MarkerBasedWorkflow:
 
                     current_pos += clip_duration
                     remaining_duration -= clip_duration
-                    fallback_offset += clip_duration
+                    fallback_idx += 1
 
-                    self.log(f"   ⚠ Fallback: {matched_video.name} ({clip_duration:.1f}s)")
+                    # Limit to avoid infinite loop
+                    if len(marker_clips) >= 20:
+                        break
 
-            # Add all clips for this marker to cuts list
+            # Log result
             if marker_clips:
-                cuts.append({
-                    "index": idx,
-                    "keyword": kw_text,
-                    "timeline_start": timeline_start,
-                    "timeline_end": timeline_end,
-                    "timeline_duration": marker_duration,
-                    "clips": marker_clips,  # Array of clips to fill marker
-                    "clip_count": len(marker_clips),
-                })
-                self.log(f"   → Tổng: {len(marker_clips)} clips để fill {marker_duration:.1f}s")
-            else:
-                cuts.append({
-                    "index": idx,
-                    "keyword": kw_text,
-                    "timeline_start": timeline_start,
-                    "timeline_end": timeline_end,
-                    "timeline_duration": marker_duration,
-                    "clips": [],
-                    "clip_count": 0,
-                })
-                self.log(f"   ❌ Không tìm thấy video")
+                self.log(f"   → {len(marker_clips)} clips để fill {marker_duration:.1f}s")
+
+            # Add to cuts list
+            cuts.append({
+                "index": idx,
+                "keyword": kw_text,
+                "timeline_start": timeline_start,
+                "timeline_end": timeline_end,
+                "timeline_duration": marker_duration,
+                "clips": marker_clips,
+                "clip_count": len(marker_clips),
+            })
 
         # Summary
         total_clips = sum(c.get("clip_count", 0) for c in cuts)

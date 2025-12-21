@@ -207,18 +207,15 @@ function insertClipToV4(sequence, projectItem, cut) {
     var clipCountBefore = v4.clips.numItems;
 
     try {
-        // Timeline position (where to place on V4)
-        var timelineStartTicks = secondsToTicks(cut.timeline_start);
+        // Timeline position (where to place this clip on V4)
+        var timelinePos = cut.timeline_pos || cut.timeline_start || 0;
+        var timelineStartTicks = secondsToTicks(timelinePos);
 
-        // Source in/out points (which segment of the video to use)
+        // Source in/out points (which segment of the source video to use)
         var clipStartSec = cut.clip_start || 0;
-        var timelineDuration = cut.timeline_duration || 5;
+        var clipDuration = cut.duration || cut.timeline_duration || 5;
 
         var clipStartTicks = secondsToTicks(clipStartSec);
-
-        log('    Timeline pos: ' + cut.timeline_start.toFixed(2) + 's');
-        log('    Source start: ' + clipStartSec.toFixed(2) + 's');
-        log('    Duration: ' + timelineDuration.toFixed(2) + 's (full marker)');
 
         // Use insertClip with ticks as string (more compatible)
         var inserted = v4.insertClip(projectItem, timelineStartTicks.toString());
@@ -230,12 +227,9 @@ function insertClipToV4(sequence, projectItem, cut) {
             // Set source IN point using ticks string
             insertedClip.inPoint = clipStartTicks.toString();
 
-            // Set clip END on timeline to fill FULL marker duration
-            var newEndTicks = insertedClip.start.ticks + secondsToTicks(timelineDuration);
+            // Set clip END on timeline based on clip duration
+            var newEndTicks = insertedClip.start.ticks + secondsToTicks(clipDuration);
             insertedClip.end = newEndTicks.toString();
-
-            log('    Clip placed: ' + (insertedClip.start.ticks / TICKS_PER_SECOND).toFixed(2) + 's - ' +
-                (insertedClip.end.ticks / TICKS_PER_SECOND).toFixed(2) + 's');
         }
 
         return true;
@@ -304,44 +298,61 @@ function main() {
     // Create bin for imported videos
     var importBin = findOrCreateBin('CutVideos');
 
-    // Process cuts
+    // Process cuts (each cut = 1 marker with multiple clips)
     var successCount = 0;
     var skipCount = 0;
     var errorCount = 0;
+    var totalClips = 0;
 
     log('');
-    log('Processing cuts...');
+    log('Processing markers...');
 
     for (var i = 0; i < cuts.length; i++) {
-        var cut = cuts[i];
-        log('');
-        log('[' + (i + 1) + '/' + cuts.length + '] "' + cut.keyword + '"');
+        var marker = cuts[i];
+        var clips = marker.clips || [];
 
-        // Skip if no video
-        if (!cut.video_path || cut.video_path === '') {
-            log('  SKIP: No video matched');
+        log('');
+        log('[' + (i + 1) + '/' + cuts.length + '] "' + marker.keyword + '" (' + clips.length + ' clips)');
+
+        // Skip if no clips
+        if (clips.length === 0) {
+            log('  SKIP: No clips for this marker');
             skipCount++;
             continue;
         }
 
-        // Get or import video
-        var projectItem = getOrImportVideo(cut.video_path, importBin);
+        // Insert each clip for this marker
+        for (var j = 0; j < clips.length; j++) {
+            var clip = clips[j];
+            totalClips++;
 
-        if (!projectItem) {
-            log('  ERROR: Could not get video');
-            errorCount++;
-            continue;
-        }
+            log('  Clip ' + (j + 1) + '/' + clips.length + ': ' + clip.video_name);
 
-        // Insert to V4
-        var success = insertClipToV4(seq, projectItem, cut);
+            // Skip if no video path
+            if (!clip.video_path || clip.video_path === '') {
+                log('    SKIP: No video path');
+                continue;
+            }
 
-        if (success) {
-            log('  OK: Inserted at ' + cut.timeline_start.toFixed(2) + 's');
-            successCount++;
-        } else {
-            log('  ERROR: Insert failed');
-            errorCount++;
+            // Get or import video
+            var projectItem = getOrImportVideo(clip.video_path, importBin);
+
+            if (!projectItem) {
+                log('    ERROR: Could not get video');
+                errorCount++;
+                continue;
+            }
+
+            // Insert clip to V4
+            var success = insertClipToV4(seq, projectItem, clip);
+
+            if (success) {
+                log('    OK: ' + clip.timeline_pos.toFixed(2) + 's (' + clip.duration.toFixed(1) + 's)');
+                successCount++;
+            } else {
+                log('    ERROR: Insert failed');
+                errorCount++;
+            }
         }
     }
 
@@ -352,11 +363,12 @@ function main() {
     log('========================================');
     log('  HOAN THANH!');
     log('========================================');
-    log('  Total:   ' + cuts.length);
-    log('  Success: ' + successCount);
-    log('  Skipped: ' + skipCount);
-    log('  Errors:  ' + errorCount);
-    log('  Time:    ' + elapsed + 's');
+    log('  Markers:     ' + cuts.length);
+    log('  Total clips: ' + totalClips);
+    log('  Success:     ' + successCount);
+    log('  Skipped:     ' + skipCount);
+    log('  Errors:      ' + errorCount);
+    log('  Time:        ' + elapsed + 's');
     log('========================================');
 
     // Save project
@@ -365,7 +377,7 @@ function main() {
         log('Project saved');
     }
 
-    alert('Hoan thanh!\n\nTotal: ' + cuts.length + '\nSuccess: ' + successCount + '\nSkipped: ' + skipCount + '\nErrors: ' + errorCount);
+    alert('Hoan thanh!\n\nMarkers: ' + cuts.length + '\nClips: ' + totalClips + '\nSuccess: ' + successCount + '\nErrors: ' + errorCount);
 }
 
 // Run

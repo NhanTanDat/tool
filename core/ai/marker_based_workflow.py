@@ -303,10 +303,10 @@ class MarkerBasedWorkflow:
         keyword_segments: Dict[str, List[Dict]]
     ) -> bool:
         """
-        Bước 4: Sinh cut list - phân bổ segments cho từng marker
+        Bước 4: Sinh cut list - GHÉP NHIỀU CLIPS NHỎ để fill marker
         """
         self.log("\n" + "="*50)
-        self.log("  BƯỚC 4: SINH CUT LIST")
+        self.log("  BƯỚC 4: SINH CUT LIST (MULTI-CLIP)")
         self.log("="*50)
 
         # Get all videos in resource folder
@@ -328,106 +328,110 @@ class MarkerBasedWorkflow:
             kw_text = kw.get("keyword", "")
             timeline_start = kw.get("start_seconds", 0)
             timeline_end = kw.get("end_seconds", 0)
-            duration = kw.get("duration_seconds", 5)
+            marker_duration = kw.get("duration_seconds", 5)
 
-            self.log(f"\n[{idx}] \"{kw_text}\" @ {kw.get('start_timecode', '')}")
+            self.log(f"\n[{idx}] \"{kw_text}\" @ {kw.get('start_timecode', '')} ({marker_duration:.1f}s)")
 
-            # Get next available segment for this keyword
+            # Get ALL segments for this keyword (not just one)
             segments = keyword_segments.get(kw_text, [])
-            seg_idx = segment_usage[kw_text]
 
-            if segments and seg_idx < len(segments):
-                # Use AI segment
-                seg = segments[seg_idx]
+            # Build list of clips to fill this marker
+            marker_clips = []
+            current_pos = timeline_start
+            remaining_duration = marker_duration
+            seg_start_idx = segment_usage[kw_text]
+
+            # First, try to fill with AI segments
+            while remaining_duration > 0.5 and seg_start_idx < len(segments):
+                seg = segments[seg_start_idx]
+                seg_duration = seg.get("end_time", 5) - seg.get("start_time", 0)
+
+                # Use this segment (clip duration = min of segment duration and remaining)
+                clip_duration = min(seg_duration, remaining_duration)
+
+                marker_clips.append({
+                    "video_path": seg.get("video_path", ""),
+                    "video_name": seg.get("video_name", ""),
+                    "clip_start": seg.get("start_time", 0),
+                    "clip_end": seg.get("start_time", 0) + clip_duration,
+                    "timeline_pos": current_pos,
+                    "duration": clip_duration,
+                    "source": "ai_matched",
+                })
+
+                current_pos += clip_duration
+                remaining_duration -= clip_duration
+                seg_start_idx += 1
                 segment_usage[kw_text] += 1
 
+                self.log(f"   ✓ AI clip: {seg.get('start_time', 0):.1f}s-{seg.get('start_time', 0) + clip_duration:.1f}s ({clip_duration:.1f}s)")
+
+            # If still need more, use fallback videos
+            if remaining_duration > 0.5 and all_videos:
+                kw_hash = hash(kw_text) % len(all_videos)
+                fallback_offset = 0
+
+                while remaining_duration > 0.5:
+                    video_idx = (kw_hash + len(marker_clips)) % len(all_videos)
+                    matched_video = all_videos[video_idx]
+
+                    # Use chunks from video
+                    clip_duration = min(10, remaining_duration)  # Max 10s per fallback clip
+
+                    marker_clips.append({
+                        "video_path": str(matched_video),
+                        "video_name": matched_video.name,
+                        "clip_start": fallback_offset,
+                        "clip_end": fallback_offset + clip_duration,
+                        "timeline_pos": current_pos,
+                        "duration": clip_duration,
+                        "source": "fallback",
+                    })
+
+                    current_pos += clip_duration
+                    remaining_duration -= clip_duration
+                    fallback_offset += clip_duration
+
+                    self.log(f"   ⚠ Fallback: {matched_video.name} ({clip_duration:.1f}s)")
+
+            # Add all clips for this marker to cuts list
+            if marker_clips:
                 cuts.append({
                     "index": idx,
                     "keyword": kw_text,
                     "timeline_start": timeline_start,
                     "timeline_end": timeline_end,
-                    "timeline_duration": duration,
-                    "video_path": seg.get("video_path", ""),
-                    "video_name": seg.get("video_name", ""),
-                    "clip_start": seg.get("start_time", 0),
-                    "clip_end": seg.get("end_time", duration),
-                    "source": "ai_matched",
+                    "timeline_duration": marker_duration,
+                    "clips": marker_clips,  # Array of clips to fill marker
+                    "clip_count": len(marker_clips),
                 })
-                self.log(f"   ✓ AI segment #{seg_idx}: {seg.get('start_time', 0):.1f}s - {seg.get('end_time', 0):.1f}s")
-
+                self.log(f"   → Tổng: {len(marker_clips)} clips để fill {marker_duration:.1f}s")
             else:
-                # Fallback: Find video in keyword subfolder or use round-robin
-                matched_video = None
-                kw_slug = kw_text.replace(" ", "_")
-                kw_folder = self.resource_folder / kw_slug
-
-                # Method 1: Look in keyword-specific subfolder
-                if kw_folder.exists():
-                    kw_videos = list(kw_folder.glob("*.mp4")) + list(kw_folder.glob("*.webm"))
-                    if kw_videos:
-                        # Use round-robin: seg_idx % len(videos)
-                        video_idx = seg_idx % len(kw_videos)
-                        matched_video = kw_videos[video_idx]
-                        self.log(f"   ✓ Folder match: {kw_folder.name}/{matched_video.name}")
-
-                # Method 2: Try filename matching
-                if not matched_video:
-                    kw_lower = kw_text.lower()
-                    for v in all_videos:
-                        if kw_lower in v.stem.lower() or v.stem.lower() in kw_lower:
-                            matched_video = v
-                            break
-
-                # Method 3: Use any available video (round-robin from all)
-                if not matched_video and all_videos:
-                    # Each keyword gets different videos
-                    kw_hash = hash(kw_text) % len(all_videos)
-                    video_idx = (kw_hash + seg_idx) % len(all_videos)
-                    matched_video = all_videos[video_idx]
-                    self.log(f"   ⚠ Fallback: dùng video #{video_idx}: {matched_video.name}")
-
-                if matched_video:
-                    # Calculate clip offset for same keyword different position
-                    offset = seg_idx * duration if seg_idx > 0 else 0
-
-                    cuts.append({
-                        "index": idx,
-                        "keyword": kw_text,
-                        "timeline_start": timeline_start,
-                        "timeline_end": timeline_end,
-                        "timeline_duration": duration,
-                        "video_path": str(matched_video),
-                        "video_name": matched_video.name,
-                        "clip_start": offset,
-                        "clip_end": offset + duration,
-                        "source": "fallback_matched",
-                    })
-                    segment_usage[kw_text] += 1
-
-                else:
-                    cuts.append({
-                        "index": idx,
-                        "keyword": kw_text,
-                        "timeline_start": timeline_start,
-                        "timeline_end": timeline_end,
-                        "timeline_duration": duration,
-                        "video_path": "",
-                        "video_name": "NOT_FOUND",
-                        "clip_start": 0,
-                        "clip_end": 0,
-                        "source": "not_found",
-                    })
-                    self.log(f"   ❌ Không tìm thấy video")
+                cuts.append({
+                    "index": idx,
+                    "keyword": kw_text,
+                    "timeline_start": timeline_start,
+                    "timeline_end": timeline_end,
+                    "timeline_duration": marker_duration,
+                    "clips": [],
+                    "clip_count": 0,
+                })
+                self.log(f"   ❌ Không tìm thấy video")
 
         # Summary
-        matched = sum(1 for c in cuts if c["video_path"])
-        ai_matched = sum(1 for c in cuts if c.get("source") == "ai_matched")
+        total_clips = sum(c.get("clip_count", 0) for c in cuts)
+        markers_with_clips = sum(1 for c in cuts if c.get("clip_count", 0) > 0)
+        ai_clips = sum(
+            sum(1 for clip in c.get("clips", []) if clip.get("source") == "ai_matched")
+            for c in cuts
+        )
 
         # Save cut list
         cut_data = {
             "count": len(cuts),
-            "matched": matched,
-            "ai_matched": ai_matched,
+            "total_clips": total_clips,
+            "markers_with_clips": markers_with_clips,
+            "ai_clips": ai_clips,
             "cuts": cuts,
         }
 
@@ -437,10 +441,11 @@ class MarkerBasedWorkflow:
         self.log("\n" + "="*50)
         self.log(f"  ✓ CUT LIST HOÀN THÀNH")
         self.log("="*50)
-        self.log(f"   Tổng markers: {len(cuts)}")
-        self.log(f"   Matched:      {matched}")
-        self.log(f"   AI matched:   {ai_matched}")
-        self.log(f"   File:         {self.cut_list_json.name}")
+        self.log(f"   Tổng markers:      {len(cuts)}")
+        self.log(f"   Markers có clips:  {markers_with_clips}")
+        self.log(f"   Tổng clips:        {total_clips}")
+        self.log(f"   AI clips:          {ai_clips}")
+        self.log(f"   File:              {self.cut_list_json.name}")
 
         return True
 

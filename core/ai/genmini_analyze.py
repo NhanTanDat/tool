@@ -406,8 +406,11 @@ def _download_proxy_video(video_url: str, out_dir: Path) -> Optional[Path]:
     return found[0] if found else None
 
 
-def _upload_and_wait_file(file_path: Path):
+def _upload_and_wait_file(file_path):
     _ensure_gemini_setup()
+    # Ensure file_path is a Path object
+    if isinstance(file_path, str):
+        file_path = Path(file_path)
     size_mb = file_path.stat().st_size / 1024 / 1024
     _vinfo("[UPLOAD] Uploading %s (%.2f MB)...", file_path.name, size_mb)
 

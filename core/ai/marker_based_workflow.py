@@ -356,14 +356,35 @@ class MarkerBasedWorkflow:
                 self.log(f"   ✓ AI segment #{seg_idx}: {seg.get('start_time', 0):.1f}s - {seg.get('end_time', 0):.1f}s")
 
             else:
-                # Fallback: match by filename
+                # Fallback: Find video in keyword subfolder or use round-robin
                 matched_video = None
-                kw_lower = kw_text.lower()
+                kw_slug = kw_text.replace(" ", "_")
+                kw_folder = self.resource_folder / kw_slug
 
-                for v in all_videos:
-                    if kw_lower in v.stem.lower() or v.stem.lower() in kw_lower:
-                        matched_video = v
-                        break
+                # Method 1: Look in keyword-specific subfolder
+                if kw_folder.exists():
+                    kw_videos = list(kw_folder.glob("*.mp4")) + list(kw_folder.glob("*.webm"))
+                    if kw_videos:
+                        # Use round-robin: seg_idx % len(videos)
+                        video_idx = seg_idx % len(kw_videos)
+                        matched_video = kw_videos[video_idx]
+                        self.log(f"   ✓ Folder match: {kw_folder.name}/{matched_video.name}")
+
+                # Method 2: Try filename matching
+                if not matched_video:
+                    kw_lower = kw_text.lower()
+                    for v in all_videos:
+                        if kw_lower in v.stem.lower() or v.stem.lower() in kw_lower:
+                            matched_video = v
+                            break
+
+                # Method 3: Use any available video (round-robin from all)
+                if not matched_video and all_videos:
+                    # Each keyword gets different videos
+                    kw_hash = hash(kw_text) % len(all_videos)
+                    video_idx = (kw_hash + seg_idx) % len(all_videos)
+                    matched_video = all_videos[video_idx]
+                    self.log(f"   ⚠ Fallback: dùng video #{video_idx}: {matched_video.name}")
 
                 if matched_video:
                     # Calculate clip offset for same keyword different position
@@ -379,10 +400,9 @@ class MarkerBasedWorkflow:
                         "video_name": matched_video.name,
                         "clip_start": offset,
                         "clip_end": offset + duration,
-                        "source": "filename_matched",
+                        "source": "fallback_matched",
                     })
                     segment_usage[kw_text] += 1
-                    self.log(f"   ✓ Filename match: {matched_video.name} (offset: {offset:.1f}s)")
 
                 else:
                     cuts.append({

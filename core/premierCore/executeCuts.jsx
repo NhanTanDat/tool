@@ -207,34 +207,48 @@ function insertClipToV4(sequence, projectItem, cut) {
     var clipCountBefore = v4.clips.numItems;
 
     try {
-        // Timeline position
-        var timelinePos = new Time();
-        timelinePos.ticks = secondsToTicks(cut.timeline_start);
+        // Timeline position (where to place on V4)
+        var timelineStartTicks = secondsToTicks(cut.timeline_start);
 
-        // Insert clip
+        // Source in/out points (which segment of the video to use)
+        var clipStartSec = cut.clip_start || 0;
+        var clipEndSec = cut.clip_end || 0;
+        var timelineDuration = cut.timeline_duration || 5;
+
+        // If no clip_end specified, use clip_start + timeline_duration
+        if (clipEndSec <= clipStartSec) {
+            clipEndSec = clipStartSec + timelineDuration;
+        }
+
+        var clipStartTicks = secondsToTicks(clipStartSec);
+        var clipEndTicks = secondsToTicks(clipEndSec);
+        var durationTicks = clipEndTicks - clipStartTicks;
+
+        log('    Timeline pos: ' + cut.timeline_start.toFixed(2) + 's');
+        log('    Source range: ' + clipStartSec.toFixed(2) + 's - ' + clipEndSec.toFixed(2) + 's');
+
+        // Method 1: Use insertClip then adjust
+        var timelinePos = new Time();
+        timelinePos.ticks = timelineStartTicks;
+
         v4.insertClip(projectItem, timelinePos);
 
-        // Get the inserted clip
+        // Get the inserted clip (should be the last one added)
         if (v4.clips.numItems > clipCountBefore) {
             var insertedClip = v4.clips[v4.clips.numItems - 1];
 
-            // Set in/out points if specified
-            if (cut.clip_start > 0 || cut.clip_end > 0) {
-                var inPoint = new Time();
-                inPoint.ticks = secondsToTicks(cut.clip_start);
-                insertedClip.inPoint = inPoint;
-            }
+            // Set source IN point (where to start in the source video)
+            var newInPoint = new Time();
+            newInPoint.ticks = clipStartTicks;
+            insertedClip.inPoint = newInPoint;
 
-            // Trim to timeline duration
-            if (cut.timeline_duration > 0) {
-                var clipDuration = (insertedClip.end.ticks - insertedClip.start.ticks) / TICKS_PER_SECOND;
+            // Set clip END on timeline (start + duration)
+            var newEnd = new Time();
+            newEnd.ticks = insertedClip.start.ticks + durationTicks;
+            insertedClip.end = newEnd;
 
-                if (clipDuration > cut.timeline_duration) {
-                    var newEnd = new Time();
-                    newEnd.ticks = insertedClip.start.ticks + secondsToTicks(cut.timeline_duration);
-                    insertedClip.end = newEnd;
-                }
-            }
+            log('    Clip placed: ' + (insertedClip.start.ticks / TICKS_PER_SECOND).toFixed(2) + 's - ' +
+                (insertedClip.end.ticks / TICKS_PER_SECOND).toFixed(2) + 's');
         }
 
         return true;

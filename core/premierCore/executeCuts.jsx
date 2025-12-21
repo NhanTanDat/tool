@@ -212,19 +212,13 @@ function insertClipToV4(sequence, projectItem, cut) {
 
         // Source in/out points (which segment of the video to use)
         var clipStartSec = cut.clip_start || 0;
-        var clipEndSec = cut.clip_end || 0;
         var timelineDuration = cut.timeline_duration || 5;
 
-        // If no clip_end specified, use clip_start + timeline_duration
-        if (clipEndSec <= clipStartSec) {
-            clipEndSec = clipStartSec + timelineDuration;
-        }
-
         var clipStartTicks = secondsToTicks(clipStartSec);
-        var durationSec = clipEndSec - clipStartSec;
 
         log('    Timeline pos: ' + cut.timeline_start.toFixed(2) + 's');
-        log('    Source range: ' + clipStartSec.toFixed(2) + 's - ' + clipEndSec.toFixed(2) + 's');
+        log('    Source start: ' + clipStartSec.toFixed(2) + 's');
+        log('    Duration: ' + timelineDuration.toFixed(2) + 's (full marker)');
 
         // Use insertClip with ticks as string (more compatible)
         var inserted = v4.insertClip(projectItem, timelineStartTicks.toString());
@@ -236,8 +230,8 @@ function insertClipToV4(sequence, projectItem, cut) {
             // Set source IN point using ticks string
             insertedClip.inPoint = clipStartTicks.toString();
 
-            // Set clip END on timeline
-            var newEndTicks = insertedClip.start.ticks + secondsToTicks(durationSec);
+            // Set clip END on timeline to fill FULL marker duration
+            var newEndTicks = insertedClip.start.ticks + secondsToTicks(timelineDuration);
             insertedClip.end = newEndTicks.toString();
 
             log('    Clip placed: ' + (insertedClip.start.ticks / TICKS_PER_SECOND).toFixed(2) + 's - ' +

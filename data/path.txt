@@ -1,4 +1,4 @@
-project_slug=test
-data_folder=C:/Users/Tam/Desktop/aThanh/autotool/data/test
-project_path=C:/Users/Tam/Documents/Adobe/Premiere Pro/22.0/test.prproj
-resource_dir=C:/Users/Tam/Documents/Adobe/Premiere Pro/22.0/resource
+project_slug=t10
+data_folder=C:/Users/Tam/Desktop/aThanh/autotool/data/t10
+project_path=C:/Users/Tam/Desktop/Copied_t10-20251207T063705Z-1-001/Copied_t10/t10.prproj
+resource_folder=C:/Users/Tam/Desktop/Copied_t10-20251207T063705Z-1-001/Copied_t10/resource

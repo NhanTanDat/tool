@@ -1,10 +1,15 @@
 /**
  * executeCuts.jsx
  *
- * STEP 3: Doc cut_list.json va thuc hien cat
- * Do clip vao V4 theo timeline da dinh nghia
+ * STEP 3: Đọc cut_list.json và cắt/đổ clip vào V4 theo timeline_pos
+ * - Hỗ trợ mỗi marker có N clips (multi-clip fill)
+ * - Ưu tiên overwriteClip (KHÔNG push timeline)
+ * - Set inPoint/outPoint đúng theo clip_start/clip_end (hoặc duration)
  *
- * CHAY RIENG - Khong phu thuoc step 1, 2
+ * YÊU CẦU:
+ * - Có file: data/path.txt  (chứa data_folder=... )
+ * - Có file: <data_folder>/cut_list.json
+ * - Sequence đang mở trong Premiere
  */
 
 var PERF_START = new Date().getTime();
@@ -17,20 +22,17 @@ function log(msg) {
 // ============== PATH UTILITIES ==============
 function normalizePath(p) {
     if (!p) return '';
-    return p.replace(/\\/g, '/').replace(/\/+/g, '/');
+    return ('' + p).replace(/\\/g, '/').replace(/\/+/g, '/');
 }
-
 function joinPath(a, b) {
     if (!a) return b || '';
     if (!b) return a || '';
     var s = a.charAt(a.length - 1);
     return (s === '/' || s === '\\') ? (a + b) : (a + '/' + b);
 }
-
 function fileExists(p) {
     try { return (new File(p)).exists; } catch (e) { return false; }
 }
-
 function readLines(p) {
     var f = new File(p);
     if (!f.exists || !f.open('r')) return [];
@@ -39,7 +41,6 @@ function readLines(p) {
     f.close();
     return arr;
 }
-
 function readFile(p) {
     var f = new File(p);
     f.encoding = 'UTF-8';
@@ -48,14 +49,22 @@ function readFile(p) {
     f.close();
     return content;
 }
+function parseJSON(str) {
+    try {
+        return eval('(' + str + ')'); // ExtendScript ES3
+    } catch (e) {
+        log('ERROR parsing JSON: ' + e);
+        return null;
+    }
+}
 
 // ============== CONFIG ==============
 var ROOT_DIR = (function () {
     try {
+        // .../core/premierCore/executeCuts.jsx -> parent.parent.parent = project root
         return new File($.fileName).parent.parent.parent.fsName.replace(/\\/g, '/');
     } catch (e) { return ''; }
 })();
-
 var DATA_DIR = joinPath(ROOT_DIR, 'data');
 
 function readPathConfig() {
@@ -77,102 +86,141 @@ function readPathConfig() {
     return cfg;
 }
 
-function parseJSON(str) {
-    try {
-        return eval('(' + str + ')');
-    } catch (e) {
-        log('ERROR parsing JSON: ' + e);
-        return null;
-    }
-}
-
-// ============== TICKS ==============
+// ============== TICKS / TIME ==============
 var TICKS_PER_SECOND = 254016000000;
 
 function secondsToTicks(seconds) {
-    return Math.floor(seconds * TICKS_PER_SECOND);
+    // round để giảm sai số tích lũy
+    return Math.round((seconds || 0) * TICKS_PER_SECOND);
+}
+
+function _setTimeTicks(timeObj, ticks) {
+    // Premiere thường là Time object: timeObj.ticks
+    try {
+        if (timeObj && timeObj.ticks !== undefined) {
+            timeObj.ticks = ticks;
+            return true;
+        }
+    } catch (e1) {}
+    // fallback: set trực tiếp string (một số bản vẫn nhận)
+    try {
+        timeObj = ticks.toString();
+        return true;
+    } catch (e2) {}
+    return false;
+}
+
+function _getTimeTicks(timeObj) {
+    try {
+        if (timeObj && timeObj.ticks !== undefined) return timeObj.ticks;
+    } catch (e) {}
+    return 0;
 }
 
 // ============== PROJECT ITEMS ==============
-var importedCache = {};
+var importedCache = {}; // normalizedPath -> ProjectItem
 
 function findOrCreateBin(binName) {
     var rootItem = app.project.rootItem;
     for (var i = 0; i < rootItem.children.numItems; i++) {
         var item = rootItem.children[i];
-        if (item.type === ProjectItemType.BIN && item.name === binName) {
-            return item;
-        }
+        try {
+            if (item && item.type === ProjectItemType.BIN && item.name === binName) {
+                return item;
+            }
+        } catch (e) {}
     }
     log('Creating bin: ' + binName);
     return rootItem.createBin(binName);
 }
 
-function findVideoInProject(videoPath) {
-    videoPath = normalizePath(videoPath);
+function searchBin(bin, videoPathNorm) {
+    for (var i = bin.children.numItems - 1; i >= 0; i--) {
+        var item = bin.children[i];
+        if (!item) continue;
 
-    // Check cache
-    if (importedCache[videoPath]) {
-        return importedCache[videoPath];
-    }
-
-    var rootItem = app.project.rootItem;
-
-    // Search from end (newly imported items)
-    for (var i = rootItem.children.numItems - 1; i >= 0; i--) {
-        var item = rootItem.children[i];
-        if (item.type === ProjectItemType.CLIP || item.type === ProjectItemType.FILE) {
-            if (normalizePath(item.getMediaPath()) === videoPath) {
-                importedCache[videoPath] = item;
-                return item;
+        // File/Clip
+        try {
+            if (item.type !== ProjectItemType.BIN) {
+                var mp = '';
+                try { mp = normalizePath(item.getMediaPath()); } catch (e1) { mp = ''; }
+                if (mp && mp === videoPathNorm) return item;
             }
-        }
-        // Search in bins
-        if (item.type === ProjectItemType.BIN) {
-            var found = searchBin(item, videoPath);
-            if (found) {
-                importedCache[videoPath] = found;
-                return found;
-            }
-        }
-    }
+        } catch (e2) {}
 
+        // Sub-bin
+        try {
+            if (item.type === ProjectItemType.BIN) {
+                var found = searchBin(item, videoPathNorm);
+                if (found) return found;
+            }
+        } catch (e3) {}
+    }
     return null;
 }
 
-function searchBin(bin, videoPath) {
-    for (var i = bin.children.numItems - 1; i >= 0; i--) {
-        var item = bin.children[i];
-        if (item.type === ProjectItemType.CLIP || item.type === ProjectItemType.FILE) {
-            if (normalizePath(item.getMediaPath()) === videoPath) {
-                return item;
+function findVideoInProject(videoPath) {
+    var videoPathNorm = normalizePath(videoPath);
+
+    if (importedCache[videoPathNorm]) return importedCache[videoPathNorm];
+
+    var rootItem = app.project.rootItem;
+
+    // Scan root children (ngược, ưu tiên mới)
+    for (var i = rootItem.children.numItems - 1; i >= 0; i--) {
+        var item = rootItem.children[i];
+        if (!item) continue;
+
+        try {
+            if (item.type === ProjectItemType.BIN) {
+                var found = searchBin(item, videoPathNorm);
+                if (found) {
+                    importedCache[videoPathNorm] = found;
+                    return found;
+                }
+            } else {
+                var mp = '';
+                try { mp = normalizePath(item.getMediaPath()); } catch (e1) { mp = ''; }
+                if (mp && mp === videoPathNorm) {
+                    importedCache[videoPathNorm] = item;
+                    return item;
+                }
             }
-        }
-        if (item.type === ProjectItemType.BIN) {
-            var found = searchBin(item, videoPath);
-            if (found) return found;
-        }
+        } catch (e2) {}
     }
+
     return null;
 }
 
 function importVideo(videoPath, targetBin) {
-    videoPath = normalizePath(videoPath);
+    var videoPathNorm = normalizePath(videoPath);
 
-    if (!fileExists(videoPath)) {
-        log('ERROR: File not found: ' + videoPath);
+    if (!fileExists(videoPathNorm)) {
+        log('ERROR: File not found: ' + videoPathNorm);
         return null;
     }
 
     try {
-        app.project.importFiles([videoPath], true, targetBin, false);
-        // Get the newly imported item
-        var rootItem = app.project.rootItem;
-        var newItem = rootItem.children[rootItem.children.numItems - 1];
-        if (newItem) {
-            importedCache[videoPath] = newItem;
-            return newItem;
+        var before = targetBin ? targetBin.children.numItems : 0;
+
+        app.project.importFiles([videoPathNorm], true, targetBin, false);
+
+        // Lấy item mới nhất trong đúng bin (an toàn hơn rootItem)
+        if (targetBin && targetBin.children.numItems > before) {
+            var newItem = targetBin.children[targetBin.children.numItems - 1];
+            if (newItem) {
+                importedCache[videoPathNorm] = newItem;
+                return newItem;
+            }
         }
+
+        // Fallback: search lại
+        var found = findVideoInProject(videoPathNorm);
+        if (found) {
+            importedCache[videoPathNorm] = found;
+            return found;
+        }
+
     } catch (e) {
         log('ERROR importing: ' + e);
     }
@@ -183,19 +231,37 @@ function importVideo(videoPath, targetBin) {
 function getOrImportVideo(videoPath, targetBin) {
     var item = findVideoInProject(videoPath);
     if (item) {
-        log('  Found in project');
+        log('    Found in project');
         return item;
     }
-
-    log('  Importing...');
+    log('    Importing...');
     return importVideo(videoPath, targetBin);
 }
 
-// ============== INSERT CLIP ==============
-function insertClipToV4(sequence, projectItem, cut) {
-    if (!sequence || !projectItem) {
-        return false;
+// ============== INSERT / OVERWRITE CLIP ==============
+function _findInsertedClipByStartTicks(vTrack, startTicks, clipCountBefore) {
+    var best = null;
+    var bestDiff = 999999999;
+
+    // scan ngược (mới) để tìm clip có start gần với startTicks
+    var n = vTrack.clips.numItems;
+    for (var i = n - 1; i >= 0; i--) {
+        var c = vTrack.clips[i];
+        if (!c || !c.start) continue;
+
+        var st = _getTimeTicks(c.start);
+        var diff = Math.abs(st - startTicks);
+        if (diff < bestDiff) {
+            bestDiff = diff;
+            best = c;
+            if (diff <= 2) break; // quá sát thì lấy luôn
+        }
     }
+    return best;
+}
+
+function insertClipToV4(sequence, projectItem, cut) {
+    if (!sequence || !projectItem) return false;
 
     var videoTracks = sequence.videoTracks;
     if (videoTracks.numTracks < 4) {
@@ -204,38 +270,67 @@ function insertClipToV4(sequence, projectItem, cut) {
     }
 
     var v4 = videoTracks[3];
-    var clipCountBefore = v4.clips.numItems;
 
     try {
-        // Timeline position (where to place this clip on V4)
-        var timelinePos = cut.timeline_pos || cut.timeline_start || 0;
+        // Timeline position
+        var timelinePos = 0;
+        if (cut.timeline_pos !== undefined && cut.timeline_pos !== null) timelinePos = cut.timeline_pos;
+        else if (cut.timeline_start !== undefined && cut.timeline_start !== null) timelinePos = cut.timeline_start;
+
+        timelinePos = Number(timelinePos) || 0;
         var timelineStartTicks = secondsToTicks(timelinePos);
 
-        // Source in/out points (which segment of the source video to use)
-        var clipStartSec = cut.clip_start || 0;
-        var clipDuration = cut.duration || cut.timeline_duration || 5;
+        // Source in/out
+        var inSec = 0;
+        if (cut.clip_start !== undefined && cut.clip_start !== null) inSec = cut.clip_start;
+        inSec = Number(inSec) || 0;
 
-        var clipStartTicks = secondsToTicks(clipStartSec);
-        var durationTicks = secondsToTicks(clipDuration);
-
-        // Use insertClip with ticks as string (more compatible)
-        v4.insertClip(projectItem, timelineStartTicks.toString());
-
-        // Get the inserted clip (should be the last one added)
-        if (v4.clips.numItems > clipCountBefore) {
-            var insertedClip = v4.clips[v4.clips.numItems - 1];
-
-            // STEP 1: Set source IN point first (where to start in source video)
-            insertedClip.inPoint = clipStartTicks.toString();
-
-            // STEP 2: Set timeline END position
-            // This determines the clip duration on timeline
-            // The outPoint will be automatically calculated based on (end - start) + inPoint
-            var timelineEndTicks = timelineStartTicks + durationTicks;
-            insertedClip.end = timelineEndTicks.toString();
-
-            log('    Source IN: ' + clipStartSec.toFixed(2) + 's, Duration: ' + clipDuration.toFixed(2) + 's');
+        var outSec = 0;
+        if (cut.clip_end !== undefined && cut.clip_end !== null && Number(cut.clip_end) > inSec) {
+            outSec = Number(cut.clip_end);
+        } else {
+            var dur = 0;
+            if (cut.duration !== undefined && cut.duration !== null) dur = cut.duration;
+            else if (cut.timeline_duration !== undefined && cut.timeline_duration !== null) dur = cut.timeline_duration;
+            dur = Number(dur) || 5;
+            if (dur < 0.05) dur = 0.05;
+            outSec = inSec + dur;
         }
+
+        var durSec = outSec - inSec;
+        if (durSec < 0.05) durSec = 0.05;
+
+        var inTicks = secondsToTicks(inSec);
+        var outTicks = secondsToTicks(outSec);
+
+        var clipCountBefore = v4.clips.numItems;
+
+        // Ưu tiên overwriteClip để không push timeline
+        if (v4.overwriteClip && typeof v4.overwriteClip === 'function') {
+            v4.overwriteClip(projectItem, timelineStartTicks.toString());
+        } else {
+            // fallback (có thể push)
+            log('WARN: overwriteClip not available, fallback to insertClip (may push timeline).');
+            v4.insertClip(projectItem, timelineStartTicks.toString());
+        }
+
+        // Tìm clip vừa đặt
+        var insertedClip = _findInsertedClipByStartTicks(v4, timelineStartTicks, clipCountBefore);
+        if (!insertedClip) {
+            log('WARN: Could not locate inserted clip at ' + timelinePos.toFixed(2) + 's');
+            return true; // đã đặt rồi nhưng không trim được
+        }
+
+        // Set source in/out
+        try { _setTimeTicks(insertedClip.inPoint, inTicks); } catch (e1) {}
+        try { _setTimeTicks(insertedClip.outPoint, outTicks); } catch (e2) {}
+
+        // Đồng bộ end theo duration mong muốn trên timeline
+        try {
+            var startT = _getTimeTicks(insertedClip.start);
+            var newEndTicks = startT + secondsToTicks(durSec);
+            _setTimeTicks(insertedClip.end, newEndTicks);
+        } catch (e3) {}
 
         return true;
 
@@ -261,7 +356,7 @@ function main() {
 
     var dataFolder = normalizePath(cfg.data_folder || '');
     if (!dataFolder) {
-        alert('ERROR: data_folder chua duoc dinh nghia');
+        alert('ERROR: data_folder chua duoc dinh nghia trong path.txt');
         return;
     }
 
@@ -273,7 +368,6 @@ function main() {
         alert('ERROR: Khong co sequence nao dang mo!');
         return;
     }
-
     log('Sequence: ' + seq.name);
 
     // Check V4
@@ -285,7 +379,7 @@ function main() {
     // Read cut_list.json
     var cutListPath = joinPath(dataFolder, 'cut_list.json');
     if (!fileExists(cutListPath)) {
-        alert('ERROR: Khong tim thay cut_list.json\n\nChay STEP 2 (generateCutList.jsx) truoc!');
+        alert('ERROR: Khong tim thay cut_list.json\n\nHay chay workflow Python de sinh cut_list.json truoc!');
         return;
     }
 
@@ -298,14 +392,15 @@ function main() {
     }
 
     var cuts = cutListData.cuts;
-    log('Loaded ' + cuts.length + ' cuts');
+    log('Loaded ' + cuts.length + ' markers');
 
     // Create bin for imported videos
     var importBin = findOrCreateBin('CutVideos');
 
-    // Process cuts (each cut = 1 marker with multiple clips)
+    // Stats
     var successCount = 0;
-    var skipCount = 0;
+    var markerSkipCount = 0;
+    var clipSkipCount = 0;
     var errorCount = 0;
     var totalClips = 0;
 
@@ -317,42 +412,50 @@ function main() {
         var clips = marker.clips || [];
 
         log('');
-        log('[' + (i + 1) + '/' + cuts.length + '] "' + marker.keyword + '" (' + clips.length + ' clips)');
+        log('[' + (i + 1) + '/' + cuts.length + '] "' + (marker.keyword || '') + '" (' + clips.length + ' clips)');
 
-        // Skip if no clips
-        if (clips.length === 0) {
-            log('  SKIP: No clips for this marker');
-            skipCount++;
+        if (!clips || clips.length === 0) {
+            log('  SKIP MARKER: No clips for this marker');
+            markerSkipCount++;
             continue;
         }
 
-        // Insert each clip for this marker
+        // Sort theo timeline_pos để đảm bảo đúng thứ tự
+        try {
+            clips.sort(function(a, b) {
+                var ta = Number(a.timeline_pos || 0);
+                var tb = Number(b.timeline_pos || 0);
+                return ta - tb;
+            });
+        } catch (eSort) {}
+
         for (var j = 0; j < clips.length; j++) {
             var clip = clips[j];
             totalClips++;
 
-            log('  Clip ' + (j + 1) + '/' + clips.length + ': ' + clip.video_name);
+            var vn = clip.video_name || '';
+            log('  Clip ' + (j + 1) + '/' + clips.length + ': ' + vn);
 
-            // Skip if no video path
-            if (!clip.video_path || clip.video_path === '') {
-                log('    SKIP: No video path');
+            if (!clip.video_path) {
+                log('    SKIP CLIP: No video_path');
+                clipSkipCount++;
                 continue;
             }
 
             // Get or import video
             var projectItem = getOrImportVideo(clip.video_path, importBin);
-
             if (!projectItem) {
-                log('    ERROR: Could not get video');
+                log('    ERROR: Could not get/import video');
                 errorCount++;
                 continue;
             }
 
-            // Insert clip to V4
-            var success = insertClipToV4(seq, projectItem, clip);
-
-            if (success) {
-                log('    OK: ' + clip.timeline_pos.toFixed(2) + 's (' + clip.duration.toFixed(1) + 's)');
+            // Insert/Overwrite to V4
+            var ok = insertClipToV4(seq, projectItem, clip);
+            if (ok) {
+                var tp = Number(clip.timeline_pos || clip.timeline_start || 0);
+                var du = Number(clip.duration || 0);
+                log('    OK: ' + tp.toFixed(2) + 's (' + du.toFixed(2) + 's)');
                 successCount++;
             } else {
                 log('    ERROR: Insert failed');
@@ -361,29 +464,43 @@ function main() {
         }
     }
 
-    // Summary
     var elapsed = ((new Date().getTime() - PERF_START) / 1000).toFixed(1);
 
     log('');
     log('========================================');
     log('  HOAN THANH!');
     log('========================================');
-    log('  Markers:     ' + cuts.length);
-    log('  Total clips: ' + totalClips);
-    log('  Success:     ' + successCount);
-    log('  Skipped:     ' + skipCount);
-    log('  Errors:      ' + errorCount);
-    log('  Time:        ' + elapsed + 's');
+    log('  Markers:         ' + cuts.length);
+    log('  Total clips:     ' + totalClips);
+    log('  Success clips:   ' + successCount);
+    log('  Skipped markers: ' + markerSkipCount);
+    log('  Skipped clips:   ' + clipSkipCount);
+    log('  Errors:          ' + errorCount);
+    log('  Time:            ' + elapsed + 's');
     log('========================================');
 
     // Save project
-    if (successCount > 0) {
-        app.project.save();
-        log('Project saved');
+    try {
+        if (successCount > 0) {
+            app.project.save();
+            log('Project saved');
+        }
+    } catch (eSave) {
+        log('WARN: Save failed: ' + eSave);
     }
 
-    alert('Hoan thanh!\n\nMarkers: ' + cuts.length + '\nClips: ' + totalClips + '\nSuccess: ' + successCount + '\nErrors: ' + errorCount);
+    alert(
+        'Hoan thanh!\n\n' +
+        'Markers: ' + cuts.length + '\n' +
+        'Total clips: ' + totalClips + '\n' +
+        'Success: ' + successCount + '\n' +
+        'Skipped markers: ' + markerSkipCount + '\n' +
+        'Skipped clips: ' + clipSkipCount + '\n' +
+        'Errors: ' + errorCount + '\n' +
+        'Time: ' + elapsed + 's'
+    );
 }
 
 // Run
 main();
+

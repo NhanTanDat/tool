@@ -184,18 +184,18 @@ class MarkerBasedWorkflow:
         self.resource_folder.mkdir(parents=True, exist_ok=True)
 
         try:
-            from core.downloadTool.down_by_yt import download_all_from_links_txt
+            from core.downloadTool.down_by_yt import download_main
 
-            count = download_all_from_links_txt(
-                links_txt=str(self.dl_links_txt),
-                output_dir=str(self.resource_folder),
-                dtype="mp4",
+            download_main(
+                parent_folder=str(self.resource_folder),
+                txt_name=str(self.dl_links_txt),
+                _type="mp4",
             )
-            self.log(f"✓ Đã download {count} videos")
-            return count > 0
+            self.log(f"✓ Đã download videos vào {self.resource_folder}")
+            return True
 
-        except ImportError:
-            self.log("⚠ Không import được download function")
+        except ImportError as e:
+            self.log(f"⚠ Không import được download function: {e}")
             self.log(f"   Chạy thủ công với: {self.dl_links_txt}")
             return True
         except Exception as e:

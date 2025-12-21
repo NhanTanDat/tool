@@ -847,6 +847,12 @@ class AutoToolGUI(tk.Tk):
             text="📝  Đọc Markers",
             command=self.run_read_markers,
         ).pack(side="left", padx=(0, 6))
+        ttk.Button(
+            action_row,
+            text="✂  Cắt & Đổ V4",
+            style="Accent.TButton",
+            command=self.run_execute_cuts,
+        ).pack(side="left", padx=(0, 6))
         ttk.Button(action_row, text="🧹  Xoá log", command=self.clear_log2).pack(
             side="left", padx=4
         )
@@ -1369,6 +1375,103 @@ Nhấn OK để tiếp tục...
             self.log2("Chạy thủ công:")
             self.log2(f"   {jsx_script}")
             # Copy path to clipboard
+            try:
+                self.clipboard_clear()
+                self.clipboard_append(jsx_script)
+            except Exception:
+                pass
+        except Exception as e:
+            self.log2(f"\n❌ LỖI: {e}")
+            self.log2("Chạy thủ công trong VS Code.")
+
+    # =================================================================
+    # Execute Cuts - Cắt và đổ clips vào V4
+    # =================================================================
+    def run_execute_cuts(self):
+        """
+        Chạy executeCuts.jsx để đổ clips vào V4 dựa trên cut_list.json
+        """
+        if not self.premier_projects:
+            messagebox.showwarning("Execute Cuts", "Chưa có file .prproj nào trong danh sách.")
+            return
+
+        proj_path = self.premier_projects[0]
+        self.log2("=== CẮT & ĐỔ CLIPS VÀO V4 ===")
+        self.log2(f"Project: {proj_path}")
+
+        # Setup paths
+        project_slug = self._derive_project_slug(proj_path)
+        data_folder = os.path.join(DATA_DIR, project_slug)
+
+        # Check cut_list.json
+        cut_list_file = os.path.join(data_folder, 'cut_list.json')
+        if not os.path.exists(cut_list_file):
+            self.log2(f"❌ Không tìm thấy: {cut_list_file}")
+            self.log2("   Hãy chạy 'Download & Match' trước!")
+            messagebox.showwarning(
+                "Thiếu Cut List",
+                "Chưa có file cut_list.json!\n\n"
+                "Hãy chạy 'Download & Match' trước."
+            )
+            return
+
+        # Write path.txt config
+        resource_dir = os.path.join(os.path.dirname(proj_path), 'resource')
+        path_txt_content = (
+            f"project_slug={project_slug}\n"
+            f"data_folder={data_folder.replace(chr(92), '/')}\n"
+            f"project_path={proj_path.replace(chr(92), '/')}\n"
+            f"resource_folder={resource_dir.replace(chr(92), '/')}\n"
+        )
+        path_txt_path = os.path.join(DATA_DIR, 'path.txt')
+        try:
+            with open(path_txt_path, 'w', encoding='utf-8') as f:
+                f.write(path_txt_content)
+            self.log2(f"✓ Đã cập nhật path.txt")
+        except Exception as e:
+            self.log2(f"LỖI khi ghi path.txt: {e}")
+            return
+
+        # Get JSX script path
+        jsx_script = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            'core', 'premierCore', 'executeCuts.jsx'
+        )
+
+        if not os.path.exists(jsx_script):
+            self.log2(f"❌ Không tìm thấy script: {jsx_script}")
+            return
+
+        self.log2(f"\n✂ Đang chạy script cắt...")
+        self.log2(f"   {jsx_script}")
+
+        # Chạy tự động qua VS Code
+        try:
+            from core.premierCore.control import run_jsx_in_vscode
+
+            self.log2("\n⏳ Đang gửi lệnh đến VS Code...")
+            self.log2("   (Đảm bảo VS Code và Premiere Pro đang mở)")
+
+            success = run_jsx_in_vscode(jsx_script)
+
+            if success:
+                self.log2("\n✓ Đã gửi lệnh chạy script!")
+                self.log2("\n⏳ Chờ script hoàn thành trong Premiere...")
+                self.log2("   Clips sẽ được đổ vào track V4")
+            else:
+                self.log2("\n❌ Không thể chạy tự động.")
+                self.log2("   Hãy chạy thủ công trong VS Code.")
+                try:
+                    self.clipboard_clear()
+                    self.clipboard_append(jsx_script)
+                    self.log2(f"\n✓ Đã copy đường dẫn vào clipboard")
+                except Exception:
+                    pass
+
+        except ImportError as e:
+            self.log2(f"\n⚠ Không import được pywinauto: {e}")
+            self.log2("Chạy thủ công:")
+            self.log2(f"   {jsx_script}")
             try:
                 self.clipboard_clear()
                 self.clipboard_append(jsx_script)

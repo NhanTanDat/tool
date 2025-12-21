@@ -916,6 +916,109 @@ def build_timeline_csv_from_segments(segments_json_path, timeline_csv_path, **kw
     return build_production_timeline(segments_json_path, timeline_csv_path)
 
 
+def analyze_video_for_keyword(
+    video_path: str,
+    keyword: str,
+    max_segments: int = 5,
+    api_key: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """
+    Phân tích video LOCAL để tìm các segments phù hợp với keyword.
+
+    Args:
+        video_path: Đường dẫn đến file video local
+        keyword: Từ khóa cần tìm
+        max_segments: Số segments tối đa cần trả về
+        api_key: Gemini API key (optional, sẽ dùng từ env nếu không cung cấp)
+
+    Returns:
+        List of segments, mỗi segment có:
+        - start_time: thời điểm bắt đầu (giây)
+        - end_time: thời điểm kết thúc (giây)
+        - confidence: độ tin cậy (0-1)
+        - description: mô tả nội dung
+    """
+    _ensure_logging_ready()
+
+    if api_key:
+        os.environ["GEMINI_API_KEY"] = api_key
+
+    if not CFG.gemini_api_key:
+        LOG.warning("Missing GEMINI_API_KEY")
+        return []
+
+    video_path = Path(video_path)
+    if not video_path.exists():
+        LOG.warning("Video not found: %s", video_path)
+        return []
+
+    keyword = _clean_keyword_line(keyword)
+    if not keyword:
+        return []
+
+    # Upload video to Gemini
+    LOG.info("Uploading video: %s", video_path.name)
+
+    try:
+        gemini_file = _upload_and_wait_file(str(video_path))
+        if not gemini_file:
+            LOG.warning("Failed to upload video")
+            return []
+    except Exception as e:
+        LOG.warning("Upload error: %s", e)
+        return []
+
+    # Analyze with Gemini
+    LOG.info("Analyzing for keyword: %s", keyword)
+
+    try:
+        segments, raw = _gemini_analyze_video_content(
+            gemini_file, keyword, max_segments, strict=True
+        )
+    except Exception as e:
+        LOG.warning("Analysis error: %s", e)
+        segments = []
+
+    # Cleanup
+    try:
+        genai.delete_file(gemini_file.name)
+    except Exception:
+        pass
+
+    # Convert to output format
+    results = []
+    for seg in segments:
+        start = float(seg.get("start_sec", 0))
+        end = float(seg.get("end_sec", 0))
+
+        if end <= start:
+            continue
+
+        # Apply padding
+        start = max(0, start - CFG.pad_sec)
+        end = end + CFG.pad_sec
+
+        # Clamp duration
+        dur = end - start
+        if dur < CFG.min_seg_dur:
+            end = start + CFG.min_seg_dur
+        if dur > CFG.max_seg_dur:
+            end = start + CFG.max_seg_dur
+
+        quality = float(seg.get("quality_score", 7) or 7)
+
+        results.append({
+            "start_time": start,
+            "end_time": end,
+            "confidence": min(1.0, max(0.1, quality / 10.0)),
+            "description": seg.get("script_notes", ""),
+            "shot_type": seg.get("shot_type", "CONTENT"),
+        })
+
+    LOG.info("Found %d segments for '%s'", len(results), keyword)
+    return results
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--dl_links", default=str(ROOT_DIR / "data" / "dl_links.txt"))

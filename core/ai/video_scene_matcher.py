@@ -8,11 +8,16 @@ AI module để:
 """
 
 import os
-import sys
 import json
 import re
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Tuple
+
+# Use centralized utilities
+from core.utils import setup_paths, load_env, get_gemini_api_key
+
+setup_paths()
+load_env()
 
 # Import AI models (nếu có)
 try:
@@ -35,7 +40,7 @@ class VideoSceneMatcher:
     """
 
     def __init__(self, gemini_api_key: Optional[str] = None):
-        self.gemini_api_key = gemini_api_key or os.getenv("GEMINI_API_KEY", "")
+        self.gemini_api_key = gemini_api_key or get_gemini_api_key() or ""
 
         if HAS_GEMINI and self.gemini_api_key:
             genai.configure(api_key=self.gemini_api_key)

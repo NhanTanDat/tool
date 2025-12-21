@@ -8,45 +8,18 @@ Orchestrator cho workflow mới:
 """
 
 import os
-import sys
 import json
 import subprocess
 import time
 from pathlib import Path
 from typing import Optional, Callable
 
-# Add project root to path
-THIS_DIR = Path(__file__).parent.resolve()
-CORE_DIR = THIS_DIR.parent
-ROOT_DIR = CORE_DIR.parent
+# Use centralized utilities
+from core.utils import setup_paths, load_env, get_gemini_api_key, ROOT_DIR
 
-if str(ROOT_DIR) not in sys.path:
-    sys.path.insert(0, str(ROOT_DIR))
-
-# ============== Load .env file ==============
-ENV_PATH = ROOT_DIR / ".env"
-
-def _load_env_file():
-    """Load environment variables from .env file"""
-    if not ENV_PATH.exists():
-        return
-    try:
-        with open(ENV_PATH, "r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line or line.startswith("#"):
-                    continue
-                if "=" in line:
-                    key, _, value = line.partition("=")
-                    key = key.strip()
-                    value = value.strip().strip('"').strip("'")
-                    if key and value:
-                        os.environ.setdefault(key, value)
-    except Exception as e:
-        print(f"[WARN] Cannot read .env: {e}")
-
-# Load .env on import
-_load_env_file()
+# Setup paths and load environment
+setup_paths()
+load_env()
 
 from core.ai.video_scene_matcher import (
     VideoSceneMatcher,

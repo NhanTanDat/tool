@@ -287,15 +287,26 @@ function overwriteClipToTrack(sequence, projectItem, trackIndex, timelineStartSe
             }
 
             if (insertedClip) {
-                // Set source IN point
+                // Log chi tiết input
+                log('    INPUT: sourceIN=' + sourceInSec.toFixed(2) + 's, duration=' + durationSec.toFixed(2) + 's');
+                log('    INPUT: timelineStart=' + timelineStartSec.toFixed(2) + 's');
+
+                // Set source IN point TRƯỚC
                 var inPoint = new Time();
                 inPoint.ticks = sourceInTicks;
                 insertedClip.inPoint = inPoint;
 
-                // Set timeline END để control duration
+                // Set timeline END để control duration (KHÔNG set outPoint)
+                var expectedEndTicks = timelineStartTicks + secondsToTicks(durationSec);
                 var endTime = new Time();
-                endTime.ticks = timelineStartTicks + secondsToTicks(durationSec);
+                endTime.ticks = expectedEndTicks;
                 insertedClip.end = endTime;
+
+                // Read back và log kết quả thực tế
+                var actualEndTicks = 0;
+                try { actualEndTicks = Number(insertedClip.end.ticks); } catch(e) {}
+                var actualDuration = (actualEndTicks - timelineStartTicks) / TICKS_PER_SECOND;
+                log('    RESULT: actualDuration=' + actualDuration.toFixed(2) + 's (expected ' + durationSec.toFixed(2) + 's)');
 
                 // Disable audio nếu có linked audio
                 try {

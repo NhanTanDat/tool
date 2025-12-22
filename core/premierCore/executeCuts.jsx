@@ -322,18 +322,35 @@ function placeAndTrim(sequence, track, projectItem, clipObj, startTicksForced) {
     }
     if (!inserted) return { ok:false, endTicks:0 };
 
-    // TRIM
+    // TRIM - FIX: Chỉ set inPoint + end, KHÔNG set outPoint để tránh conflict
     var expectedEndTicks = timelineStartTicks + durTicks;
     try {
+        // Log chi tiết để debug
+        log('  TRIM: source IN=' + srcInSec.toFixed(2) + 's, duration=' + durSec.toFixed(2) + 's');
+        log('  TRIM: timeline start=' + (timelineStartTicks/TICKS_PER_SECOND).toFixed(2) + 's, end=' + (expectedEndTicks/TICKS_PER_SECOND).toFixed(2) + 's');
+
+        // STEP 1: Set source IN point TRƯỚC
         setPropTicks(inserted, 'inPoint', inTicks);
-        setPropTicks(inserted, 'outPoint', outTicks);
-        setPropTicks(inserted, 'start', timelineStartTicks);
+
+        // STEP 2: Set timeline END để control duration
+        // KHÔNG set outPoint - Premiere sẽ tự tính từ (end - start) + inPoint
         setPropTicks(inserted, 'end', expectedEndTicks);
 
-        // read back real end ticks (frame snapped)
+        // STEP 3: Verify start position (đã được set bởi overwriteClip, nhưng double-check)
+        var currentStart = 0;
+        try { currentStart = Number(inserted.start.ticks); } catch(e) {}
+        if (Math.abs(currentStart - timelineStartTicks) > secondsToTicks(0.1)) {
+            setPropTicks(inserted, 'start', timelineStartTicks);
+        }
+
+        // Read back real end ticks (frame snapped)
         var realEnd = expectedEndTicks;
         try { realEnd = Number(inserted.end.ticks); } catch (eR) {}
         if (!realEnd || isNaN(realEnd)) realEnd = expectedEndTicks;
+
+        // Log kết quả thực tế
+        var realDur = (realEnd - timelineStartTicks) / TICKS_PER_SECOND;
+        log('  RESULT: actual duration=' + realDur.toFixed(2) + 's (expected ' + durSec.toFixed(2) + 's)');
 
         return { ok:true, endTicks: realEnd };
     } catch (eTrim) {

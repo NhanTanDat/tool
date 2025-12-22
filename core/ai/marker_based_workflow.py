@@ -430,6 +430,9 @@ class MarkerBasedWorkflow:
             current_pos = timeline_start
             remaining = marker_duration
 
+            # Track used segments để không duplicate
+            used_segment_ids = set()
+
             # Fill bằng AI segments theo cursor của keyword
             safety = 0
             while remaining > 0.5 and segments and safety < 500:
@@ -437,12 +440,19 @@ class MarkerBasedWorkflow:
 
                 cur = seg_cursor[kw_text]
                 if cur >= len(segments):
-                    # hết segments: cho phép reuse vòng lại (nhưng vẫn không reset mỗi marker nữa)
-                    cur = 0
-                    seg_cursor[kw_text] = 0
+                    # HẾT AI SEGMENTS - KHÔNG LOOP, chuyển sang fallback time-based
+                    self.log(f"   ⚠ Hết AI segments ({len(segments)}), dùng time-based chunks")
+                    break
 
                 seg = segments[seg_cursor[kw_text]]
                 seg_cursor[kw_text] += 1
+
+                # Check duplicate
+                seg_id = f"{seg.get('video_path', '')}|{_f(seg.get('start_time', 0)):.1f}"
+                if seg_id in used_segment_ids:
+                    self.log(f"   SKIP duplicate segment: {seg_id}")
+                    continue
+                used_segment_ids.add(seg_id)
 
                 st, en = _seg_times(seg)
                 seg_dur = max(0.0, en - st)
@@ -457,7 +467,7 @@ class MarkerBasedWorkflow:
                         "video_name": seg.get("video_name", ""),
                         "clip_start": st,
                         "clip_end": st + clip_dur,
-                        "timeline_pos": current_pos,  # <-- bám marker start
+                        "timeline_pos": current_pos,
                         "duration": clip_dur,
                         "source": "ai_matched",
                     }
@@ -468,6 +478,38 @@ class MarkerBasedWorkflow:
 
                 if len(marker_clips) >= 20:
                     break
+
+            # TIME-BASED FALLBACK: khi hết AI segments, dùng sequential chunks từ video
+            if remaining > 0.5 and segments:
+                # Lấy video từ segment cuối cùng đã dùng
+                last_video = segments[-1].get("video_path", "") if segments else ""
+                if last_video:
+                    # Tìm video end time (ước tính 5 phút nếu không biết)
+                    last_seg_end = max(_seg_times(s)[1] for s in segments if s.get("video_path") == last_video)
+                    chunk_start = last_seg_end + 1.0  # Bắt đầu sau segment cuối
+                    chunk_idx = 0
+
+                    self.log(f"   → Dùng time-based chunks từ {chunk_start:.1f}s")
+
+                    while remaining > 0.5 and chunk_idx < 50:
+                        chunk_dur = min(5.0, remaining)  # Mỗi chunk 5s
+
+                        marker_clips.append(
+                            {
+                                "video_path": last_video,
+                                "video_name": Path(last_video).name if last_video else "unknown",
+                                "clip_start": chunk_start,
+                                "clip_end": chunk_start + chunk_dur,
+                                "timeline_pos": current_pos,
+                                "duration": chunk_dur,
+                                "source": "time_based_fallback",
+                            }
+                        )
+
+                        current_pos += chunk_dur
+                        remaining -= chunk_dur
+                        chunk_start += chunk_dur + 0.5  # Gap nhỏ giữa các chunks
+                        chunk_idx += 1
 
             # Fallback nếu không có AI segments
             if remaining > 0.5 and not segments and all_videos:

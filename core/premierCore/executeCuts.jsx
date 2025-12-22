@@ -322,25 +322,35 @@ function placeAndTrim(sequence, track, projectItem, clipObj, startTicksForced) {
     }
     if (!inserted) return { ok:false, endTicks:0 };
 
-    // TRIM - FIX: Chỉ set inPoint + end, KHÔNG set outPoint để tránh conflict
+    // TRIM - FIX: Dùng Time object để set inPoint đúng cách
     var expectedEndTicks = timelineStartTicks + durTicks;
     try {
         // Log chi tiết để debug
-        log('  TRIM: source IN=' + srcInSec.toFixed(2) + 's, duration=' + durSec.toFixed(2) + 's');
-        log('  TRIM: timeline start=' + (timelineStartTicks/TICKS_PER_SECOND).toFixed(2) + 's, end=' + (expectedEndTicks/TICKS_PER_SECOND).toFixed(2) + 's');
+        log('  TRIM: source IN=' + srcInSec.toFixed(2) + 's (ticks=' + inTicks + ')');
+        log('  TRIM: duration=' + durSec.toFixed(2) + 's, timeline end=' + (expectedEndTicks/TICKS_PER_SECOND).toFixed(2) + 's');
 
-        // STEP 1: Set source IN point TRƯỚC
-        setPropTicks(inserted, 'inPoint', inTicks);
+        // STEP 1: Set source IN point bằng Time object (QUAN TRỌNG!)
+        var inPointTime = new Time();
+        inPointTime.ticks = String(inTicks);
+        inserted.inPoint = inPointTime;
 
-        // STEP 2: Set timeline END để control duration
-        // KHÔNG set outPoint - Premiere sẽ tự tính từ (end - start) + inPoint
-        setPropTicks(inserted, 'end', expectedEndTicks);
+        // Verify inPoint được set đúng
+        var actualInTicks = 0;
+        try { actualInTicks = Number(inserted.inPoint.ticks); } catch(e) {}
+        log('  VERIFY: inPoint set=' + (actualInTicks/TICKS_PER_SECOND).toFixed(2) + 's (expected ' + srcInSec.toFixed(2) + 's)');
 
-        // STEP 3: Verify start position (đã được set bởi overwriteClip, nhưng double-check)
+        // STEP 2: Set timeline END bằng Time object
+        var endTime = new Time();
+        endTime.ticks = String(expectedEndTicks);
+        inserted.end = endTime;
+
+        // STEP 3: Verify start position
         var currentStart = 0;
         try { currentStart = Number(inserted.start.ticks); } catch(e) {}
         if (Math.abs(currentStart - timelineStartTicks) > secondsToTicks(0.1)) {
-            setPropTicks(inserted, 'start', timelineStartTicks);
+            var startTime = new Time();
+            startTime.ticks = String(timelineStartTicks);
+            inserted.start = startTime;
         }
 
         // Read back real end ticks (frame snapped)

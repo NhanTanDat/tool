@@ -6,6 +6,16 @@
  *
  * FIX: Pack clip SAT NHAU theo end thật (frame-accurate) -> không gap, không bị băm.
  * NEW: DISABLE + CLEAR ALL AUDIO (xóa sạch toàn bộ âm thanh)
+ *
+ * FIX IMPORT:
+ *  - normalize path + lowercase key (Windows safe)
+ *  - import by File(fsName) to ensure correct OS path
+ *  - poll after import to wait Premiere indexing
+ *  - resolve data_folder relative -> ROOT/data/<folder>
+ *
+ * FIX TIME:
+ *  - Premiere hay ignore inPoint/outPoint khi overwriteClip => nó lấy từ đầu clip
+ *  - Giải pháp chắc ăn: createSubClip(start,end) rồi overwrite subclip
  */
 
 var PERF_START = new Date().getTime();
@@ -27,7 +37,11 @@ var CLEAR_ALL_AUDIO_AT_START = false;         // nếu muốn xóa audio trướ
 // ================= PATH =================
 function normalizePath(p) {
     if (!p) return '';
-    return p.replace(/\\/g, '/').replace(/\/+/g, '/');
+    return String(p).replace(/\\/g, '/').replace(/\/+/g, '/');
+}
+function normalizeKey(p) {
+    // dùng để so sánh trên Windows (case-insensitive)
+    return normalizePath(p).toLowerCase();
 }
 function joinPath(a, b) {
     if (!a) return b || '';
@@ -79,6 +93,16 @@ function readPathConfig() {
     }
     return cfg;
 }
+function resolveDataFolder(cfg) {
+    var df = normalizePath(cfg.data_folder || cfg.project_slug || '');
+    if (!df) return '';
+    // absolute Windows: "C:/..."
+    if (df.indexOf(':') > 0) return df;
+    // absolute unix: "/..."
+    if (df.indexOf('/') === 0) return df;
+    // relative -> ROOT/data/<df>
+    return joinPath(DATA_DIR, df);
+}
 function parseJSON(str) {
     try { return eval('(' + str + ')'); }
     catch (e) { log('ERROR parsing JSON: ' + e); return null; }
@@ -101,6 +125,9 @@ function makeTimeFromTicks(ticks) {
     t.ticks = String(Math.round(Number(ticks)));
     return t;
 }
+function makeTimeFromSeconds(sec) {
+    return makeTimeFromTicks(secondsToTicks(sec));
+}
 function setPropTicks(obj, propName, ticks) {
     try {
         if (obj[propName] && obj[propName].ticks !== undefined) {
@@ -116,7 +143,7 @@ function setPropTicks(obj, propName, ticks) {
 }
 
 // ================= IMPORT =================
-var importedCache = {};
+var importedCache = {}; // key = normalizeKey(videoPath)
 
 function findOrCreateBin(binName) {
     var rootItem = app.project.rootItem;
@@ -128,16 +155,18 @@ function findOrCreateBin(binName) {
     return rootItem.createBin(binName);
 }
 
-function searchBin(bin, videoPath) {
+function searchBin(bin, videoKey) {
     for (var i = bin.children.numItems - 1; i >= 0; i--) {
         var item = bin.children[i];
+
         if (item.type === ProjectItemType.CLIP || item.type === ProjectItemType.FILE) {
             try {
-                if (normalizePath(item.getMediaPath()) === videoPath) return item;
+                var mp = item.getMediaPath ? item.getMediaPath() : '';
+                if (normalizeKey(mp) === videoKey) return item;
             } catch (e) {}
         }
         if (item.type === ProjectItemType.BIN) {
-            var found = searchBin(item, videoPath);
+            var found = searchBin(item, videoKey);
             if (found) return found;
         }
     }
@@ -145,26 +174,29 @@ function searchBin(bin, videoPath) {
 }
 
 function findVideoInProject(videoPath) {
-    videoPath = normalizePath(videoPath);
-    if (importedCache[videoPath]) return importedCache[videoPath];
+    var key = normalizeKey(videoPath);
+    if (importedCache[key]) return importedCache[key];
 
     var rootItem = app.project.rootItem;
+
+    // scan root level
     for (var i = rootItem.children.numItems - 1; i >= 0; i--) {
         var item = rootItem.children[i];
 
         if (item.type === ProjectItemType.CLIP || item.type === ProjectItemType.FILE) {
             try {
-                if (normalizePath(item.getMediaPath()) === videoPath) {
-                    importedCache[videoPath] = item;
+                var mp = item.getMediaPath ? item.getMediaPath() : '';
+                if (normalizeKey(mp) === key) {
+                    importedCache[key] = item;
                     return item;
                 }
             } catch (e1) {}
         }
 
         if (item.type === ProjectItemType.BIN) {
-            var found = searchBin(item, videoPath);
+            var found = searchBin(item, key);
             if (found) {
-                importedCache[videoPath] = found;
+                importedCache[key] = found;
                 return found;
             }
         }
@@ -173,14 +205,28 @@ function findVideoInProject(videoPath) {
 }
 
 function importVideo(videoPath, targetBin) {
-    videoPath = normalizePath(videoPath);
+    var key = normalizeKey(videoPath);
     if (!fileExists(videoPath)) { log('ERROR: File not found: ' + videoPath); return null; }
 
     try {
-        app.project.importFiles([videoPath], true, targetBin, false);
-        try { $.sleep(150); } catch (e) {}
-        var item = findVideoInProject(videoPath);
-        if (item) { importedCache[videoPath] = item; return item; }
+        // use fsName (OS-native path) for import reliability
+        var f = new File(videoPath);
+        var toImport = f.fsName;
+
+        log('Importing: ' + toImport);
+        app.project.importFiles([toImport], true, targetBin, false);
+
+        // poll to let Premiere index
+        for (var k = 0; k < 30; k++) { // ~3s
+            try { $.sleep(100); } catch (eS) {}
+            var item = findVideoInProject(videoPath);
+            if (item) {
+                importedCache[key] = item;
+                log('Imported OK: ' + normalizePath(item.getMediaPath ? item.getMediaPath() : videoPath));
+                return item;
+            }
+        }
+        log('WARN: Imported but not found yet (index slow): ' + videoPath);
     } catch (e2) {
         log('ERROR importing: ' + e2);
     }
@@ -188,8 +234,9 @@ function importVideo(videoPath, targetBin) {
 }
 
 function getOrImportVideo(videoPath, targetBin) {
-    var item = findVideoInProject(videoPath);
-    if (item) return item;
+    videoPath = normalizePath(videoPath);
+    var found = findVideoInProject(videoPath);
+    if (found) return found;
     return importVideo(videoPath, targetBin);
 }
 
@@ -213,8 +260,8 @@ function getTrackItemMediaPath(trackItem) {
     return '';
 }
 function findClipByStart(track, startTicks, videoPath, toleranceTicks) {
-    videoPath = normalizePath(videoPath);
-    toleranceTicks = safeNum(toleranceTicks, secondsToTicks(0.3));
+    var videoKey = normalizeKey(videoPath);
+    toleranceTicks = safeNum(toleranceTicks, secondsToTicks(0.2)); // nhỏ hơn để tránh bắt nhầm
     var best = null;
     var bestDelta = 999999999999;
 
@@ -226,7 +273,7 @@ function findClipByStart(track, startTicks, videoPath, toleranceTicks) {
             var delta = Math.abs(st - startTicks);
             if (delta <= toleranceTicks) {
                 var mp = getTrackItemMediaPath(it);
-                if (mp === videoPath) {
+                if (normalizeKey(mp) === videoKey) {
                     if (delta < bestDelta) { best = it; bestDelta = delta; }
                 }
             }
@@ -245,7 +292,6 @@ function disableAllAudioTracks(sequence) {
         var t = ats[i];
         try { if (t.setMute) t.setMute(true); } catch (e1) {}
         try { if (t.setLocked) t.setLocked(true); } catch (e2) {}
-        try { if (t.isLocked && t.isLocked()) {} } catch (e3) {}
     }
 }
 
@@ -263,7 +309,8 @@ function clearAllAudioClips(sequence) {
     if (!sequence || !sequence.audioTracks) return;
     log('Clearing ALL audio clips in sequence...');
     var ats = sequence.audioTracks;
-    // đảm bảo unlock để remove được
+
+    // unlock để remove được
     for (var i = 0; i < ats.numTracks; i++) {
         try { if (ats[i].setLocked) ats[i].setLocked(false); } catch (e0) {}
     }
@@ -277,7 +324,57 @@ function clearAllAudioClips(sequence) {
     }
 }
 
-// ================= CORE: PLACE + TRIM =================
+// ================= SUBCLIP FIX (FOR 정확 clip_start/clip_end) =================
+var subclipCache = {}; // key = mediaPath|inSec|outSec
+
+function _fmt3(n) {
+    return (Math.round(Number(n) * 1000) / 1000).toFixed(3);
+}
+function getMediaPathSafe(projectItem) {
+    try { return normalizePath(projectItem.getMediaPath ? projectItem.getMediaPath() : ''); } catch (e) {}
+    return '';
+}
+
+/**
+ * Tạo subclip để Premiere cắt đúng time.
+ * Nếu fail -> fallback dùng original projectItem (nhưng có thể vẫn bị lấy từ đầu).
+ */
+function getOrCreateSubclip(baseItem, inSec, outSec) {
+    if (!baseItem) return null;
+
+    inSec = safeNum(inSec, 0);
+    outSec = safeNum(outSec, inSec + 0.05);
+    if (outSec <= inSec) outSec = inSec + 0.05;
+
+    var mp = getMediaPathSafe(baseItem);
+    var key = normalizeKey(mp) + '|' + _fmt3(inSec) + '|' + _fmt3(outSec);
+    if (subclipCache[key]) return subclipCache[key];
+
+    // tên đủ unique theo range
+    var name = (baseItem.name || 'clip') + '_sub_' +
+        _fmt3(inSec).replace('.', 'p') + '_' + _fmt3(outSec).replace('.', 'p');
+
+    try {
+        var st = makeTimeFromSeconds(inSec);
+        var en = makeTimeFromSeconds(outSec);
+
+        var hasHardBoundaries = 1;
+        var takeVideo = 1;
+        var takeAudio = 0; // IMPORTANT: không lấy audio
+
+        // createSubClip(name, startTime, endTime, hasHardBoundaries, takeVideo, takeAudio)
+        var sub = baseItem.createSubClip(name, st, en, hasHardBoundaries, takeVideo, takeAudio);
+        if (sub) {
+            subclipCache[key] = sub;
+            return sub;
+        }
+    } catch (e) {
+        log('WARN createSubClip failed: ' + e);
+    }
+    return null;
+}
+
+// ================= CORE: PLACE (USING SUBCLIP) =================
 // return: { ok:bool, endTicks:number }
 function placeAndTrim(sequence, track, projectItem, clipObj, startTicksForced) {
     if (!sequence || !track || !projectItem || !clipObj) return { ok:false, endTicks:0 };
@@ -288,9 +385,9 @@ function placeAndTrim(sequence, track, projectItem, clipObj, startTicksForced) {
         ? Math.round(Number(startTicksForced))
         : secondsToTicks(safeNum(clipObj.timeline_pos, safeNum(clipObj.timeline_start, 0)));
 
-    var srcInSec = safeNum(clipObj.clip_start, 0);
+    var srcInSec  = safeNum(clipObj.clip_start, 0);
     var srcOutSec = safeNum(clipObj.clip_end, -1);
-    var durSec = safeNum(clipObj.duration, -1);
+    var durSec    = safeNum(clipObj.duration, -1);
 
     if (srcOutSec > srcInSec) durSec = (srcOutSec - srcInSec);
     else if (durSec > 0) srcOutSec = srcInSec + durSec;
@@ -298,14 +395,14 @@ function placeAndTrim(sequence, track, projectItem, clipObj, startTicksForced) {
 
     if (durSec < 0.05) { durSec = 0.05; srcOutSec = srcInSec + durSec; }
 
-    var inTicks = secondsToTicks(srcInSec);
-    var outTicks = secondsToTicks(srcOutSec);
-    var durTicks = Math.max(1, outTicks - inTicks);
+    // ✅ FIX: tạo subclip đúng đoạn cần lấy
+    var subclipItem = getOrCreateSubclip(projectItem, srcInSec, srcOutSec);
+    var itemToPlace = subclipItem || projectItem;
 
     // PLACE (overwrite -> không ripple)
     try {
         if (typeof track.overwriteClip === 'function') {
-            track.overwriteClip(projectItem, makeTimeFromTicks(timelineStartTicks));
+            track.overwriteClip(itemToPlace, makeTimeFromTicks(timelineStartTicks));
         } else {
             log('ERROR: overwriteClip() not available.');
             return { ok:false, endTicks:0 };
@@ -315,48 +412,21 @@ function placeAndTrim(sequence, track, projectItem, clipObj, startTicksForced) {
         return { ok:false, endTicks:0 };
     }
 
-    // FIND inserted
-    var inserted = findClipByStart(track, timelineStartTicks, normalizePath(projectItem.getMediaPath()), secondsToTicks(0.5));
+    // FIND inserted (by start + mediapath)
+    var mp = '';
+    try { mp = itemToPlace.getMediaPath ? itemToPlace.getMediaPath() : ''; } catch (eMP) {}
+    var inserted = findClipByStart(track, timelineStartTicks, mp, secondsToTicks(0.2));
     if (!inserted) {
         try { inserted = track.clips[track.clips.numItems - 1]; } catch (eLast) {}
     }
     if (!inserted) return { ok:false, endTicks:0 };
 
-    // TRIM - FIX: Chỉ set inPoint + end, KHÔNG set outPoint để tránh conflict
-    var expectedEndTicks = timelineStartTicks + durTicks;
-    try {
-        // Log chi tiết để debug
-        log('  TRIM: source IN=' + srcInSec.toFixed(2) + 's, duration=' + durSec.toFixed(2) + 's');
-        log('  TRIM: timeline start=' + (timelineStartTicks/TICKS_PER_SECOND).toFixed(2) + 's, end=' + (expectedEndTicks/TICKS_PER_SECOND).toFixed(2) + 's');
+    // Với subclip thì không cần set in/out nữa (Premiere hay ignore) -> chỉ lấy end thật để pack
+    var realEnd = 0;
+    try { realEnd = Number(inserted.end.ticks); } catch (eR) { realEnd = 0; }
+    if (!realEnd || isNaN(realEnd)) realEnd = timelineStartTicks + secondsToTicks(durSec);
 
-        // STEP 1: Set source IN point TRƯỚC
-        setPropTicks(inserted, 'inPoint', inTicks);
-
-        // STEP 2: Set timeline END để control duration
-        // KHÔNG set outPoint - Premiere sẽ tự tính từ (end - start) + inPoint
-        setPropTicks(inserted, 'end', expectedEndTicks);
-
-        // STEP 3: Verify start position (đã được set bởi overwriteClip, nhưng double-check)
-        var currentStart = 0;
-        try { currentStart = Number(inserted.start.ticks); } catch(e) {}
-        if (Math.abs(currentStart - timelineStartTicks) > secondsToTicks(0.1)) {
-            setPropTicks(inserted, 'start', timelineStartTicks);
-        }
-
-        // Read back real end ticks (frame snapped)
-        var realEnd = expectedEndTicks;
-        try { realEnd = Number(inserted.end.ticks); } catch (eR) {}
-        if (!realEnd || isNaN(realEnd)) realEnd = expectedEndTicks;
-
-        // Log kết quả thực tế
-        var realDur = (realEnd - timelineStartTicks) / TICKS_PER_SECOND;
-        log('  RESULT: actual duration=' + realDur.toFixed(2) + 's (expected ' + durSec.toFixed(2) + 's)');
-
-        return { ok:true, endTicks: realEnd };
-    } catch (eTrim) {
-        log('ERROR trimming: ' + eTrim);
-        return { ok:false, endTicks:0 };
-    }
+    return { ok:true, endTicks: realEnd };
 }
 
 // ================= SORT (ES3) =================
@@ -383,7 +453,7 @@ function main() {
     var cfg = readPathConfig();
     if (!cfg) { alert('ERROR: Khong tim thay data/path.txt'); return; }
 
-    var dataFolder = normalizePath(cfg.data_folder || '');
+    var dataFolder = resolveDataFolder(cfg);
     if (!dataFolder) { alert('ERROR: data_folder chua duoc dinh nghia'); return; }
     log('Data folder: ' + dataFolder);
 
@@ -448,7 +518,8 @@ function main() {
 
             if (!clip || !clip.video_path) { skipCount++; continue; }
 
-            var projectItem = getOrImportVideo(normalizePath(clip.video_path), importBin);
+            var vp = normalizePath(clip.video_path);
+            var projectItem = getOrImportVideo(vp, importBin);
             if (!projectItem) { errorCount++; continue; }
 
             var startTicks = PACK_CLIPS_WITHIN_MARKER ? cursorTicks : secondsToTicks(safeNum(clip.timeline_pos, 0));
@@ -465,10 +536,8 @@ function main() {
 
     // HARD CLEAN: remove ALL audio clips (absolute)
     if (CLEAR_ALL_AUDIO_AT_END) {
-        // unlock first (we may have locked them)
         unlockAllAudioTracks(seq);
         clearAllAudioClips(seq);
-        // keep muted/locked after clean? tùy bạn. Mình để mute lại cho chắc:
         if (DISABLE_ALL_AUDIO_TRACKS_BEFORE) disableAllAudioTracks(seq);
     }
 

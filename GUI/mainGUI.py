@@ -836,6 +836,11 @@ class AutoToolGUI(tk.Tk):
             text="🤖  AI Auto V4",
             command=self.run_ai_v4_workflow,
         ).pack(side="left", padx=(0, 6))
+        ttk.Button(
+            action_row,
+            text="👤  Face V4",
+            command=self.run_face_v4_workflow,
+        ).pack(side="left", padx=(0, 6))
         ttk.Button(action_row, text="🧹  Xoá log", command=self.clear_log2).pack(
             side="left", padx=4
         )
@@ -1282,6 +1287,188 @@ Nhấn OK để bắt đầu...
             messagebox.showerror("Lỗi", f"Lỗi khi chạy workflow:\n{e}")
 
         self.log2("=== KẾT THÚC AI AUTO V4 WORKFLOW ===")
+
+    # =================================================================
+    # Face Recognition V4 Workflow
+    # =================================================================
+    def run_face_v4_workflow(self):
+        """
+        Chạy workflow Face Recognition:
+        1. Đọc keywords từ Track 3 (tên nhân vật)
+        2. Quét video tìm khuôn mặt nhân vật
+        3. Trích xuất clips 2-4 giây
+        4. Push vào V4
+        """
+        if not self.premier_projects:
+            messagebox.showwarning("Face V4", "Chưa có file .prproj nào trong danh sách.")
+            return
+
+        proj_path = self.premier_projects[0]
+
+        self.log2("=== BẮT ĐẦU FACE RECOGNITION V4 WORKFLOW ===")
+        self.log2(f"Project: {proj_path}")
+
+        # Setup paths
+        project_slug = self._derive_project_slug(proj_path)
+        data_folder = os.path.join(DATA_DIR, project_slug)
+        resource_dir = os.path.join(os.path.dirname(proj_path), 'resource')
+
+        # Ensure folders exist
+        os.makedirs(data_folder, exist_ok=True)
+        if not os.path.exists(resource_dir):
+            self.log2(f"LỖI: Resource folder không tồn tại: {resource_dir}")
+            messagebox.showerror("Face V4", f"Resource folder không tồn tại:\n{resource_dir}")
+            return
+
+        # Write path.txt config
+        path_txt_content = (
+            f"project_slug={project_slug}\n"
+            f"data_folder={data_folder.replace(chr(92), '/')}\n"
+            f"project_path={proj_path.replace(chr(92), '/')}\n"
+            f"resource_dir={resource_dir.replace(chr(92), '/')}\n"
+        )
+        path_txt_path = os.path.join(DATA_DIR, 'path.txt')
+        try:
+            with open(path_txt_path, 'w', encoding='utf-8') as f:
+                f.write(path_txt_content)
+            self.log2(f"Đã cập nhật path.txt")
+        except Exception as e:
+            self.log2(f"LỖI khi ghi path.txt: {e}")
+            return
+
+        # Ask for faces_db path
+        from tkinter import simpledialog
+        faces_db_default = os.path.join(
+            os.path.dirname(os.path.dirname(__file__)),
+            'core', 'faceDetect', 'faces_db'
+        )
+
+        faces_db = filedialog.askdirectory(
+            title="Chọn thư mục Faces Database (chứa ảnh nhân vật)",
+            initialdir=faces_db_default
+        )
+
+        if not faces_db:
+            faces_db = faces_db_default
+            self.log2(f"Sử dụng faces_db mặc định: {faces_db}")
+
+        # Ask for clip duration
+        min_dur = simpledialog.askfloat(
+            "Clip Duration",
+            "Độ dài clip TỐI THIỂU (giây):",
+            initialvalue=2.0,
+            minvalue=1.0,
+            maxvalue=10.0,
+            parent=self
+        )
+        max_dur = simpledialog.askfloat(
+            "Clip Duration",
+            "Độ dài clip TỐI ĐA (giây):",
+            initialvalue=4.0,
+            minvalue=2.0,
+            maxvalue=15.0,
+            parent=self
+        )
+
+        if min_dur is None:
+            min_dur = 2.0
+        if max_dur is None:
+            max_dur = 4.0
+
+        self.log2(f"Clip duration: {min_dur}s - {max_dur}s")
+
+        # Import workflow
+        try:
+            from core.ai.face_v4_workflow import FaceV4Workflow
+        except Exception as e:
+            self.log2(f"LỖI: Không import được FaceV4Workflow: {e}")
+            messagebox.showerror("Face V4", f"Không import được module:\n{e}")
+            return
+
+        # Create workflow
+        workflow = FaceV4Workflow(
+            project_path=proj_path,
+            data_folder=data_folder,
+            resource_folder=resource_dir,
+            faces_db_path=faces_db,
+            min_clip_duration=min_dur,
+            max_clip_duration=max_dur,
+            log_callback=self.log2,
+        )
+
+        # Check faces database
+        characters = workflow.check_faces_database()
+        if not characters:
+            setup_guide = """
+HƯỚNG DẪN SETUP FACES DATABASE:
+
+1. Tạo thư mục cho mỗi nhân vật:
+   faces_db/
+   ├── Nguyen_Van_A/
+   │   ├── face1.jpg
+   │   ├── face2.jpg
+   │   └── ...
+   ├── Tran_Thi_B/
+   │   └── ...
+   └── ...
+
+2. Thêm 3-5 ảnh khuôn mặt cho mỗi nhân vật
+   - Ảnh rõ nét, chính diện
+   - Nhiều góc độ khác nhau càng tốt
+
+3. Tên thư mục = tên nhân vật (dùng làm keyword)
+
+4. Chạy lại Face V4 Workflow sau khi setup xong.
+
+HOẶC sử dụng công cụ setup:
+python core/faceDetect/setup_faces_db.py --help
+"""
+            self.log2(setup_guide)
+            messagebox.showwarning(
+                "Setup Required",
+                "Chưa có nhân vật nào trong Faces Database.\n\n"
+                "Xem log để biết cách setup."
+            )
+            return
+
+        # Show instructions
+        instructions = f"""
+👤 FACE RECOGNITION V4 WORKFLOW
+
+NHÂN VẬT TRONG DATABASE ({len(characters)}):
+{chr(10).join(f'  - {c}' for c in characters)}
+
+CHUẨN BỊ:
+1. MỞ PREMIERE PRO và mở project
+2. MỞ VS CODE (để chạy scripts tự động)
+3. SEQUENCE có:
+   - Track 3: Text clips với TÊN NHÂN VẬT
+   - Track 4: Sẽ được fill tự động
+4. Sequence đang ACTIVE
+
+WORKFLOW:
+→ Step 1: Extract keywords từ Track 3
+→ Step 2: Quét video tìm khuôn mặt ({min_dur}s-{max_dur}s clips)
+→ Step 3: Push clips vào Track V4
+
+Nhấn OK để bắt đầu...
+"""
+        result = messagebox.showinfo("Face V4 Workflow", instructions)
+
+        # Run workflow
+        try:
+            success = workflow.run_full_workflow()
+            if success:
+                self.log2("WORKFLOW HOÀN THÀNH!")
+                messagebox.showinfo("Thành công", "Face Recognition V4 workflow hoàn thành!")
+            else:
+                self.log2("WORKFLOW FAILED")
+                messagebox.showerror("Lỗi", "Workflow thất bại. Xem log để biết chi tiết.")
+        except Exception as e:
+            self.log2(f"LỖI workflow: {e}")
+            messagebox.showerror("Lỗi", f"Lỗi khi chạy workflow:\n{e}")
+
+        self.log2("=== KẾT THÚC FACE RECOGNITION V4 WORKFLOW ===")
 
     # =================================================================
     # Download images (nếu chỉ muốn tải ảnh)

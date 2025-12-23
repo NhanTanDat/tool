@@ -465,7 +465,8 @@ HARD RULES:
 - Each clip should be a DIFFERENT moment (action/angle/context).
 
 DURATION:
-- Prefer 1–12 seconds.
+- Each clip MUST be 2-4 seconds long (optimal: 3 seconds).
+- Do NOT return clips shorter than 2 seconds or longer than 4 seconds.
 
 OUTPUT:
 JSON only. Provide concise notes. Provide dedupe_group for near-duplicates.
@@ -482,7 +483,8 @@ RULES:
 - If uncertain, still pick best-guess moments related to "{keyword}".
 
 DURATION:
-- Prefer 1–12 seconds.
+- Each clip MUST be 2-4 seconds long (optimal: 3 seconds).
+- Do NOT return clips shorter than 2 seconds or longer than 4 seconds.
 
 OUTPUT:
 JSON only. Provide concise notes. Provide dedupe_group for near-duplicates.

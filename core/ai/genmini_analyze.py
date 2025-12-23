@@ -99,6 +99,102 @@ def _clean_keyword_line(s: str) -> str:
     return s
 
 
+def _is_character_keyword(keyword: str) -> bool:
+    """
+    Detect if keyword is a character/person name.
+    Returns True if keyword looks like a person's name.
+    """
+    keyword = (keyword or "").strip().lower()
+    if not keyword:
+        return False
+
+    # Common character/person indicators
+    person_indicators = [
+        "character", "nhân vật", "nhan vat", "diễn viên", "dien vien",
+        "actor", "actress", "người", "nguoi", "face", "mặt", "mat",
+        "person", "human", "man", "woman", "boy", "girl", "child",
+        "mr.", "mrs.", "ms.", "dr.", "prof.", "ông", "bà", "anh", "chị",
+    ]
+
+    for indicator in person_indicators:
+        if indicator in keyword:
+            return True
+
+    # Check if it's a proper name (capitalized words, typically 2-4 words)
+    words = keyword.split()
+    if 1 <= len(words) <= 5:
+        # Vietnamese/Asian names or Western names
+        # Check if most words start with uppercase (in original)
+        original_words = (keyword or "").strip().split()
+        capitalized_count = sum(1 for w in original_words if w and w[0].isupper())
+        if capitalized_count >= len(words) * 0.5:
+            return True
+
+    return False
+
+
+def _get_character_prompt(keyword: str, max_segments: int, strict: bool) -> str:
+    """
+    Generate specialized prompt for finding character/face appearances.
+    Focus on 2-4 second clips where the character's face is visible.
+    """
+    min_dur = CFG.face_clip_min_dur
+    max_dur = CFG.face_clip_max_dur
+
+    if strict:
+        return f"""
+TASK: You are a professional video editor. Find ALL clips where "{keyword}" appears ON SCREEN.
+
+CRITICAL REQUIREMENTS:
+1. ONLY return clips where you can SEE the person/character "{keyword}" in the frame
+2. The face or body of "{keyword}" MUST be clearly visible
+3. Each clip should be {min_dur}-{max_dur} seconds long (STRICT!)
+4. Clips must be NON-OVERLAPPING and show DIFFERENT moments
+5. Return at most {max_segments} clips
+
+WHAT TO LOOK FOR:
+- Face close-ups of "{keyword}"
+- Medium shots where "{keyword}" is clearly visible
+- Scenes where "{keyword}" is the main focus
+- Any frame where "{keyword}" appears prominently
+
+WHAT TO AVOID:
+- Scenes without "{keyword}" visible
+- Blurry or unclear shots
+- Crowd scenes where "{keyword}" is not identifiable
+- Clips longer than {max_dur} seconds
+
+OUTPUT FORMAT:
+Return JSON with segments array. Each segment must have:
+- start_sec: Start time in seconds
+- end_sec: End time in seconds (duration should be {min_dur}-{max_dur}s)
+- script_notes: Brief description of what "{keyword}" is doing
+- quality_score: 1-10 (10 = perfect face shot, clear visibility)
+- face_visible: true/false (MUST be true)
+
+Focus on QUALITY over QUANTITY. Only include clips where "{keyword}" is CLEARLY VISIBLE.
+""".strip()
+    else:
+        return f"""
+TASK: Find clips that LIKELY contain the person/character "{keyword}" (LENIENT MODE).
+
+REQUIREMENTS:
+1. Return clips where "{keyword}" MIGHT appear (even if not 100% certain)
+2. Each clip should be approximately {min_dur}-{max_dur} seconds
+3. Return at most {max_segments} clips
+4. Clips must be NON-OVERLAPPING
+
+INCLUDE:
+- Any scene that might show "{keyword}"
+- Scenes with people who could be "{keyword}"
+- Group scenes where "{keyword}" might be present
+
+OUTPUT FORMAT:
+Return JSON with segments array containing start_sec, end_sec, script_notes, quality_score.
+Duration should be around {min_dur}-{max_dur} seconds per clip.
+""".strip()
+
+
 @dataclass(frozen=True)
 class Cfg:
     gemini_api_key: str = (os.environ.get("GEMINI_API_KEY") or "").strip()
@@ -110,6 +206,11 @@ class Cfg:
     pad_sec: float = _safe_float_env("GENMINI_PAD_SEC", 0.10)
     min_seg_dur: float = _safe_float_env("GENMINI_MIN_SEG_DUR", 1.0)
     max_seg_dur: float = _safe_float_env("GENMINI_MAX_SEG_DUR", 12.0)
+
+    # Face/Character detection settings
+    face_clip_min_dur: float = _safe_float_env("GENMINI_FACE_CLIP_MIN_DUR", 2.0)
+    face_clip_max_dur: float = _safe_float_env("GENMINI_FACE_CLIP_MAX_DUR", 4.0)
+    face_detection_mode: bool = _env_bool("GENMINI_FACE_DETECTION_MODE", "1")
 
     strict_quality_min: float = _safe_float_env("GENMINI_STRICT_QUALITY_MIN", 2.0)
     lenient_quality_min: float = _safe_float_env("GENMINI_LENIENT_QUALITY_MIN", 1.0)
@@ -354,9 +455,19 @@ def _upload_and_wait_file(file_path: Path):
         return None
 
 
-def _gemini_analyze_video_content(video_file, keyword: str, max_segments: int, *, strict: bool) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+def _gemini_analyze_video_content(video_file, keyword: str, max_segments: int, *, strict: bool, is_character: bool = None) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
     """
-    return: (filtered_segments, raw_segments)
+    Analyze video content using Gemini AI.
+
+    Args:
+        video_file: Uploaded Gemini file object
+        keyword: Search keyword (can be character name or general topic)
+        max_segments: Maximum number of segments to return
+        strict: Use strict or lenient analysis mode
+        is_character: Force character detection mode. If None, auto-detect.
+
+    Returns:
+        Tuple of (filtered_segments, raw_segments)
     """
     if genai is None:
         return [], []
@@ -365,6 +476,10 @@ def _gemini_analyze_video_content(video_file, keyword: str, max_segments: int, *
     if not keyword:
         return [], []
 
+    # Auto-detect if keyword is a character/person name
+    if is_character is None:
+        is_character = CFG.face_detection_mode and _is_character_keyword(keyword)
+
     safety_settings = {
         HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_ONLY_HIGH,
         HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_ONLY_HIGH,
@@ -372,9 +487,19 @@ def _gemini_analyze_video_content(video_file, keyword: str, max_segments: int, *
         HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_ONLY_HIGH,
     }
 
-    if strict:
+    # Use character-specific prompt for face/person detection
+    if is_character:
+        _vinfo("[GEMINI] Character mode: Finding face/person clips for '%s' (2-4s)", keyword)
+        prompt = _get_character_prompt(keyword, max_segments, strict)
+        quality_min = CFG.strict_quality_min if strict else CFG.lenient_quality_min
+        temperature = 0.15 if strict else 0.3  # Lower temperature for more precise face detection
+        min_dur = CFG.face_clip_min_dur
+        max_dur = CFG.face_clip_max_dur
+    elif strict:
         quality_min = CFG.strict_quality_min
         temperature = 0.2
+        min_dur = CFG.min_seg_dur
+        max_dur = CFG.max_seg_dur
         prompt = f"""
 TASK: Act as a senior video editor. Extract the BEST, MOST DISTINCT clips of: "{keyword}".
 
@@ -392,6 +517,8 @@ JSON only. Provide concise notes. Provide dedupe_group for near-duplicates.
     else:
         quality_min = CFG.lenient_quality_min
         temperature = 0.35
+        min_dur = CFG.min_seg_dur
+        max_dur = CFG.max_seg_dur
         prompt = f"""
 TASK: Find clips that MOST LIKELY contain: "{keyword}" (LENIENT PASS).
 
@@ -458,8 +585,25 @@ JSON only. Provide concise notes. Provide dedupe_group for near-duplicates.
                         continue
                     dur = en - st
                     q = float(s.get("quality_score", 6) or 6)
-                    if dur >= CFG.min_seg_dur and q >= quality_min:
-                        filtered.append(s)
+
+                    # Apply duration constraints based on mode
+                    if dur < min_dur:
+                        continue
+                    if q < quality_min:
+                        continue
+
+                    # For character mode, enforce max duration strictly
+                    if is_character and dur > max_dur:
+                        # Trim to max duration, keeping center
+                        center = (st + en) / 2
+                        st = center - max_dur / 2
+                        en = center + max_dur / 2
+                        s = dict(s)  # Copy to avoid modifying original
+                        s["start_sec"] = st
+                        s["end_sec"] = en
+                        s["script_notes"] = s.get("script_notes", "") + f" [trimmed to {max_dur}s]"
+
+                    filtered.append(s)
                 except Exception:
                     continue
 
@@ -499,10 +643,29 @@ JSON only. Provide concise notes. Provide dedupe_group for near-duplicates.
     return [], []
 
 
-def analyze_video_production_standard(video_url: str, keyword: str, max_segments: int = 8) -> List[Dict[str, Any]]:
+def analyze_video_production_standard(video_url: str, keyword: str, max_segments: int = 8, is_character: bool = None) -> List[Dict[str, Any]]:
+    """
+    Analyze video and extract segments matching keyword.
+
+    Args:
+        video_url: URL of the video to analyze
+        keyword: Search keyword (can be character name or general topic)
+        max_segments: Maximum number of segments to return
+        is_character: Force character detection mode. If None, auto-detect from keyword.
+
+    Returns:
+        List of segments with start_sec, end_sec, confidence, type, reason
+    """
     keyword = _clean_keyword_line(keyword)
     vid_id = re.sub(r"\W+", "_", video_url.split("v=")[-1] if "v=" in video_url else video_url)[-40:]
     cache_dir = ROOT_DIR / "data" / ".cache" / "analysis_videos" / vid_id
+
+    # Auto-detect character mode if not specified
+    if is_character is None:
+        is_character = CFG.face_detection_mode and _is_character_keyword(keyword)
+
+    if is_character:
+        _vinfo("[ANALYZE] Character mode enabled for '%s' - clips will be 2-4 seconds", keyword)
 
     video_path = _download_proxy_video(video_url, cache_dir)
     if not video_path:
@@ -514,13 +677,13 @@ def analyze_video_production_standard(video_url: str, keyword: str, max_segments
 
     _vinfo("[GEMINI] Analyzing VIDEO content for '%s'...", keyword)
 
-    strict_segs, strict_raw = _gemini_analyze_video_content(gemini_file, keyword, max_segments, strict=True)
+    strict_segs, strict_raw = _gemini_analyze_video_content(gemini_file, keyword, max_segments, strict=True, is_character=is_character)
     use_segs = strict_segs
     use_raw = strict_raw
 
     if CFG.retry_lenient and len(use_segs) < max(0, CFG.min_keep_per_video):
         _vinfo("[GEMINI] Strict too few (%d). Retrying LENIENT...", len(use_segs))
-        lenient_segs, lenient_raw = _gemini_analyze_video_content(gemini_file, keyword, max(3, min(max_segments, 6)), strict=False)
+        lenient_segs, lenient_raw = _gemini_analyze_video_content(gemini_file, keyword, max(3, min(max_segments, 6)), strict=False, is_character=is_character)
         if len(lenient_segs) > len(use_segs):
             use_segs = lenient_segs
             use_raw = lenient_raw
@@ -529,6 +692,14 @@ def analyze_video_production_standard(video_url: str, keyword: str, max_segments
         genai.delete_file(gemini_file.name)
     except Exception:
         pass
+
+    # Determine duration constraints based on mode
+    if is_character:
+        min_dur = CFG.face_clip_min_dur
+        max_dur = CFG.face_clip_max_dur
+    else:
+        min_dur = CFG.min_seg_dur
+        max_dur = CFG.max_seg_dur
 
     final_segments: List[Dict[str, Any]] = []
 
@@ -544,22 +715,34 @@ def analyze_video_production_standard(video_url: str, keyword: str, max_segments
             return
 
         dur = e - s
-        if dur < CFG.min_seg_dur:
-            # ép tối thiểu cho đỡ bị rớt
-            e = s + CFG.min_seg_dur
-        if (e - s) > CFG.max_seg_dur:
-            e = s + CFG.max_seg_dur
+
+        # Apply duration constraints
+        if dur < min_dur:
+            # Extend to minimum duration
+            e = s + min_dur
+        if dur > max_dur:
+            # Trim to max duration, keeping the center
+            center = (s + e) / 2
+            s = center - max_dur / 2
+            e = center + max_dur / 2
+            s = max(0.0, s)
 
         q = float(item.get("quality_score", 6) or 6)
         conf = max(0.1, min(1.0, q / 10.0))
+
+        # Add character flag to output if applicable
+        segment_type = item.get("shot_type", item.get("type", "CONTENT"))
+        if is_character:
+            segment_type = "FACE_CLIP"
 
         final_segments.append(
             {
                 "start_sec": s,
                 "end_sec": e,
                 "confidence": conf,
-                "type": item.get("shot_type", item.get("type", "CONTENT")),
+                "type": segment_type,
                 "reason": f"[VISUAL] {item.get('script_notes', '')}".strip(),
+                "is_character_clip": is_character,
             }
         )
 

@@ -110,8 +110,8 @@ class Cfg:
     player_client: str = (os.environ.get("YTDLP_PLAYER_CLIENT", "android") or "android").strip().lower()
 
     pad_sec: float = _safe_float_env("GENMINI_PAD_SEC", 0.10)
-    min_seg_dur: float = _safe_float_env("GENMINI_MIN_SEG_DUR", 1.0)
-    max_seg_dur: float = _safe_float_env("GENMINI_MAX_SEG_DUR", 12.0)
+    min_seg_dur: float = _safe_float_env("GENMINI_MIN_SEG_DUR", 2.0)
+    max_seg_dur: float = _safe_float_env("GENMINI_MAX_SEG_DUR", 4.0)
 
     strict_quality_min: float = _safe_float_env("GENMINI_STRICT_QUALITY_MIN", 2.0)
     lenient_quality_min: float = _safe_float_env("GENMINI_LENIENT_QUALITY_MIN", 1.0)

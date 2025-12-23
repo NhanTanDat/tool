@@ -99,99 +99,59 @@ def _clean_keyword_line(s: str) -> str:
     return s
 
 
-def _is_character_keyword(keyword: str) -> bool:
-    """
-    Detect if keyword is a character/person name.
-    Returns True if keyword looks like a person's name.
-    """
-    keyword = (keyword or "").strip().lower()
-    if not keyword:
-        return False
-
-    # Common character/person indicators
-    person_indicators = [
-        "character", "nhân vật", "nhan vat", "diễn viên", "dien vien",
-        "actor", "actress", "người", "nguoi", "face", "mặt", "mat",
-        "person", "human", "man", "woman", "boy", "girl", "child",
-        "mr.", "mrs.", "ms.", "dr.", "prof.", "ông", "bà", "anh", "chị",
-    ]
-
-    for indicator in person_indicators:
-        if indicator in keyword:
-            return True
-
-    # Check if it's a proper name (capitalized words, typically 2-4 words)
-    words = keyword.split()
-    if 1 <= len(words) <= 5:
-        # Vietnamese/Asian names or Western names
-        # Check if most words start with uppercase (in original)
-        original_words = (keyword or "").strip().split()
-        capitalized_count = sum(1 for w in original_words if w and w[0].isupper())
-        if capitalized_count >= len(words) * 0.5:
-            return True
-
-    return False
-
-
 def _get_character_prompt(keyword: str, max_segments: int, strict: bool) -> str:
     """
-    Generate specialized prompt for finding character/face appearances.
-    Focus on 2-4 second clips where the character's face is visible.
+    Generate prompt for finding clips where the person/character in keyword appears.
+    Gemini will find scenes where the face of the person mentioned in keyword is visible.
+    Focus on 2-4 second clips.
     """
     min_dur = CFG.face_clip_min_dur
     max_dur = CFG.face_clip_max_dur
 
     if strict:
         return f"""
-TASK: You are a professional video editor. Find ALL clips where "{keyword}" appears ON SCREEN.
+TASK: Find video clips where the FACE of the person/character mentioned in "{keyword}" is VISIBLE.
 
-CRITICAL REQUIREMENTS:
-1. ONLY return clips where you can SEE the person/character "{keyword}" in the frame
-2. The face or body of "{keyword}" MUST be clearly visible
-3. Each clip should be {min_dur}-{max_dur} seconds long (STRICT!)
-4. Clips must be NON-OVERLAPPING and show DIFFERENT moments
-5. Return at most {max_segments} clips
+IMPORTANT: The keyword "{keyword}" contains a person/character name. Find clips where that person's FACE appears on screen.
+
+STRICT REQUIREMENTS:
+1. ONLY return clips where you can SEE the person's FACE clearly
+2. Each clip MUST be {min_dur}-{max_dur} seconds long
+3. Clips must be NON-OVERLAPPING
+4. Return at most {max_segments} clips
+5. Focus on CLOSE-UP or MEDIUM shots where face is visible
 
 WHAT TO LOOK FOR:
-- Face close-ups of "{keyword}"
-- Medium shots where "{keyword}" is clearly visible
-- Scenes where "{keyword}" is the main focus
-- Any frame where "{keyword}" appears prominently
+- Scenes where the person's face is clearly visible
+- Close-up shots of the person
+- Medium shots where the person is the main focus
+- Any moment where the person appears prominently
 
-WHAT TO AVOID:
-- Scenes without "{keyword}" visible
+AVOID:
+- Scenes where face is not visible (back of head, too far away)
 - Blurry or unclear shots
-- Crowd scenes where "{keyword}" is not identifiable
 - Clips longer than {max_dur} seconds
 
-OUTPUT FORMAT:
-Return JSON with segments array. Each segment must have:
-- start_sec: Start time in seconds
-- end_sec: End time in seconds (duration should be {min_dur}-{max_dur}s)
-- script_notes: Brief description of what "{keyword}" is doing
-- quality_score: 1-10 (10 = perfect face shot, clear visibility)
-- face_visible: true/false (MUST be true)
-
-Focus on QUALITY over QUANTITY. Only include clips where "{keyword}" is CLEARLY VISIBLE.
+OUTPUT:
+Return JSON with segments array. Each segment:
+- start_sec: Start time (seconds)
+- end_sec: End time (seconds) - duration MUST be {min_dur}-{max_dur}s
+- script_notes: What the person is doing in this clip
+- quality_score: 1-10 (10 = perfect face visibility)
 """.strip()
     else:
         return f"""
-TASK: Find clips that LIKELY contain the person/character "{keyword}" (LENIENT MODE).
+TASK: Find clips where the person/character in "{keyword}" MIGHT appear (LENIENT).
+
+Find any scene where the person mentioned might be visible, even if not 100% certain.
 
 REQUIREMENTS:
-1. Return clips where "{keyword}" MIGHT appear (even if not 100% certain)
-2. Each clip should be approximately {min_dur}-{max_dur} seconds
-3. Return at most {max_segments} clips
-4. Clips must be NON-OVERLAPPING
+1. Clips should be approximately {min_dur}-{max_dur} seconds
+2. Return at most {max_segments} clips
+3. NON-OVERLAPPING clips only
 
-INCLUDE:
-- Any scene that might show "{keyword}"
-- Scenes with people who could be "{keyword}"
-- Group scenes where "{keyword}" might be present
-
-OUTPUT FORMAT:
-Return JSON with segments array containing start_sec, end_sec, script_notes, quality_score.
-Duration should be around {min_dur}-{max_dur} seconds per clip.
+OUTPUT:
+Return JSON with segments array: start_sec, end_sec, script_notes, quality_score.
 """.strip()
 
 
@@ -476,9 +436,9 @@ def _gemini_analyze_video_content(video_file, keyword: str, max_segments: int, *
     if not keyword:
         return [], []
 
-    # Auto-detect if keyword is a character/person name
+    # Use face detection mode if enabled (keyword contains character name)
     if is_character is None:
-        is_character = CFG.face_detection_mode and _is_character_keyword(keyword)
+        is_character = CFG.face_detection_mode
 
     safety_settings = {
         HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_ONLY_HIGH,
@@ -660,12 +620,12 @@ def analyze_video_production_standard(video_url: str, keyword: str, max_segments
     vid_id = re.sub(r"\W+", "_", video_url.split("v=")[-1] if "v=" in video_url else video_url)[-40:]
     cache_dir = ROOT_DIR / "data" / ".cache" / "analysis_videos" / vid_id
 
-    # Auto-detect character mode if not specified
+    # Use face detection mode if enabled (keyword contains character name)
     if is_character is None:
-        is_character = CFG.face_detection_mode and _is_character_keyword(keyword)
+        is_character = CFG.face_detection_mode
 
     if is_character:
-        _vinfo("[ANALYZE] Character mode enabled for '%s' - clips will be 2-4 seconds", keyword)
+        _vinfo("[ANALYZE] Face detection mode: finding clips with '%s' visible (2-4s)", keyword)
 
     video_path = _download_proxy_video(video_url, cache_dir)
     if not video_path:

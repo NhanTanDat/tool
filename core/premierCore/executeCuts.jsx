@@ -16,6 +16,10 @@
  * FIX TIME:
  *  - Premiere hay ignore inPoint/outPoint khi overwriteClip => nó lấy từ đầu clip
  *  - Giải pháp chắc ăn: createSubClip(start,end) rồi overwrite subclip
+ *
+ * NEW (MIX):
+ *  - Trộn clip trong cùng keyword theo round-robin giữa nhiều video
+ *  - Tránh 2 clip liên tiếp cùng video (nếu còn video khác để chọn)
  */
 
 var PERF_START = new Date().getTime();
@@ -34,13 +38,24 @@ var DISABLE_ALL_AUDIO_TRACKS_BEFORE = true;   // khóa/mute toàn bộ audio tra
 var CLEAR_ALL_AUDIO_AT_END = true;            // xóa sạch toàn bộ audio clips sau khi chạy
 var CLEAR_ALL_AUDIO_AT_START = false;         // nếu muốn xóa audio trước khi chạy thì bật true
 
+// ================= MIX CONFIG (TRỘN TRONG 1 KEY) =================
+var MIX_WITHIN_KEYWORD = true;                 // ✅ bật để TRỘN clip trong cùng keyword
+var MIX_AVOID_SAME_VIDEO_CONSECUTIVE = true;   // ✅ tránh 2 clip liên tiếp cùng video (nếu còn video khác)
+var MIX_SHUFFLE_VIDEO_ORDER = false;           // shuffle thứ tự video trong keyword (tự nhiên hơn)
+var MIX_PER_VIDEO_LIMIT = 0;                   // giới hạn số clip mỗi video trong keyword (0 = không giới hạn)
+var MIX_MAX_CLIPS_PER_KEYWORD = 0;             // giới hạn tổng clip trong keyword (0 = không giới hạn)
+
+// Nếu keyword xuất hiện nhiều markers: gộp lại thành 1 keyword rồi mới trộn
+var MERGE_MARKERS_SAME_KEYWORD = false;        // ✅ nếu muốn "1 keyword = 1 block" thì bật true
+// Nếu MERGE true: pack keyword blocks liên tục 1 dòng (bỏ timeline_start gốc)
+var PACK_KEYWORD_BLOCKS_SEQUENTIALLY = false;  // bật true nếu muốn keyword nối tiếp nhau thành 1 video
+
 // ================= PATH =================
 function normalizePath(p) {
     if (!p) return '';
     return String(p).replace(/\\/g, '/').replace(/\/+/g, '/');
 }
 function normalizeKey(p) {
-    // dùng để so sánh trên Windows (case-insensitive)
     return normalizePath(p).toLowerCase();
 }
 function joinPath(a, b) {
@@ -96,12 +111,9 @@ function readPathConfig() {
 function resolveDataFolder(cfg) {
     var df = normalizePath(cfg.data_folder || cfg.project_slug || '');
     if (!df) return '';
-    // absolute Windows: "C:/..."
-    if (df.indexOf(':') > 0) return df;
-    // absolute unix: "/..."
-    if (df.indexOf('/') === 0) return df;
-    // relative -> ROOT/data/<df>
-    return joinPath(DATA_DIR, df);
+    if (df.indexOf(':') > 0) return df;      // absolute Windows
+    if (df.indexOf('/') === 0) return df;    // absolute unix
+    return joinPath(DATA_DIR, df);           // relative
 }
 function parseJSON(str) {
     try { return eval('(' + str + ')'); }
@@ -127,19 +139,6 @@ function makeTimeFromTicks(ticks) {
 }
 function makeTimeFromSeconds(sec) {
     return makeTimeFromTicks(secondsToTicks(sec));
-}
-function setPropTicks(obj, propName, ticks) {
-    try {
-        if (obj[propName] && obj[propName].ticks !== undefined) {
-            obj[propName].ticks = String(Math.round(Number(ticks)));
-            return true;
-        }
-    } catch (e) {}
-    try {
-        obj[propName] = String(Math.round(Number(ticks)));
-        return true;
-    } catch (e2) {}
-    return false;
 }
 
 // ================= IMPORT =================
@@ -179,7 +178,6 @@ function findVideoInProject(videoPath) {
 
     var rootItem = app.project.rootItem;
 
-    // scan root level
     for (var i = rootItem.children.numItems - 1; i >= 0; i--) {
         var item = rootItem.children[i];
 
@@ -209,14 +207,12 @@ function importVideo(videoPath, targetBin) {
     if (!fileExists(videoPath)) { log('ERROR: File not found: ' + videoPath); return null; }
 
     try {
-        // use fsName (OS-native path) for import reliability
         var f = new File(videoPath);
         var toImport = f.fsName;
 
         log('Importing: ' + toImport);
         app.project.importFiles([toImport], true, targetBin, false);
 
-        // poll to let Premiere index
         for (var k = 0; k < 30; k++) { // ~3s
             try { $.sleep(100); } catch (eS) {}
             var item = findVideoInProject(videoPath);
@@ -261,7 +257,7 @@ function getTrackItemMediaPath(trackItem) {
 }
 function findClipByStart(track, startTicks, videoPath, toleranceTicks) {
     var videoKey = normalizeKey(videoPath);
-    toleranceTicks = safeNum(toleranceTicks, secondsToTicks(0.2)); // nhỏ hơn để tránh bắt nhầm
+    toleranceTicks = safeNum(toleranceTicks, secondsToTicks(0.2));
     var best = null;
     var bestDelta = 999999999999;
 
@@ -294,7 +290,6 @@ function disableAllAudioTracks(sequence) {
         try { if (t.setLocked) t.setLocked(true); } catch (e2) {}
     }
 }
-
 function unlockAllAudioTracks(sequence) {
     if (!sequence || !sequence.audioTracks) return;
     var ats = sequence.audioTracks;
@@ -304,13 +299,11 @@ function unlockAllAudioTracks(sequence) {
         try { if (t.setMute) t.setMute(false); } catch (e2) {}
     }
 }
-
 function clearAllAudioClips(sequence) {
     if (!sequence || !sequence.audioTracks) return;
     log('Clearing ALL audio clips in sequence...');
     var ats = sequence.audioTracks;
 
-    // unlock để remove được
     for (var i = 0; i < ats.numTracks; i++) {
         try { if (ats[i].setLocked) ats[i].setLocked(false); } catch (e0) {}
     }
@@ -324,7 +317,7 @@ function clearAllAudioClips(sequence) {
     }
 }
 
-// ================= SUBCLIP FIX (FOR 정확 clip_start/clip_end) =================
+// ================= SUBCLIP FIX =================
 var subclipCache = {}; // key = mediaPath|inSec|outSec
 
 function _fmt3(n) {
@@ -334,11 +327,6 @@ function getMediaPathSafe(projectItem) {
     try { return normalizePath(projectItem.getMediaPath ? projectItem.getMediaPath() : ''); } catch (e) {}
     return '';
 }
-
-/**
- * Tạo subclip để Premiere cắt đúng time.
- * Nếu fail -> fallback dùng original projectItem (nhưng có thể vẫn bị lấy từ đầu).
- */
 function getOrCreateSubclip(baseItem, inSec, outSec) {
     if (!baseItem) return null;
 
@@ -350,7 +338,6 @@ function getOrCreateSubclip(baseItem, inSec, outSec) {
     var key = normalizeKey(mp) + '|' + _fmt3(inSec) + '|' + _fmt3(outSec);
     if (subclipCache[key]) return subclipCache[key];
 
-    // tên đủ unique theo range
     var name = (baseItem.name || 'clip') + '_sub_' +
         _fmt3(inSec).replace('.', 'p') + '_' + _fmt3(outSec).replace('.', 'p');
 
@@ -360,9 +347,8 @@ function getOrCreateSubclip(baseItem, inSec, outSec) {
 
         var hasHardBoundaries = 1;
         var takeVideo = 1;
-        var takeAudio = 0; // IMPORTANT: không lấy audio
+        var takeAudio = 0;
 
-        // createSubClip(name, startTime, endTime, hasHardBoundaries, takeVideo, takeAudio)
         var sub = baseItem.createSubClip(name, st, en, hasHardBoundaries, takeVideo, takeAudio);
         if (sub) {
             subclipCache[key] = sub;
@@ -375,7 +361,6 @@ function getOrCreateSubclip(baseItem, inSec, outSec) {
 }
 
 // ================= CORE: PLACE (USING SUBCLIP) =================
-// return: { ok:bool, endTicks:number }
 function placeAndTrim(sequence, track, projectItem, clipObj, startTicksForced) {
     if (!sequence || !track || !projectItem || !clipObj) return { ok:false, endTicks:0 };
 
@@ -395,11 +380,9 @@ function placeAndTrim(sequence, track, projectItem, clipObj, startTicksForced) {
 
     if (durSec < 0.05) { durSec = 0.05; srcOutSec = srcInSec + durSec; }
 
-    // ✅ FIX: tạo subclip đúng đoạn cần lấy
     var subclipItem = getOrCreateSubclip(projectItem, srcInSec, srcOutSec);
     var itemToPlace = subclipItem || projectItem;
 
-    // PLACE (overwrite -> không ripple)
     try {
         if (typeof track.overwriteClip === 'function') {
             track.overwriteClip(itemToPlace, makeTimeFromTicks(timelineStartTicks));
@@ -412,7 +395,6 @@ function placeAndTrim(sequence, track, projectItem, clipObj, startTicksForced) {
         return { ok:false, endTicks:0 };
     }
 
-    // FIND inserted (by start + mediapath)
     var mp = '';
     try { mp = itemToPlace.getMediaPath ? itemToPlace.getMediaPath() : ''; } catch (eMP) {}
     var inserted = findClipByStart(track, timelineStartTicks, mp, secondsToTicks(0.2));
@@ -421,7 +403,6 @@ function placeAndTrim(sequence, track, projectItem, clipObj, startTicksForced) {
     }
     if (!inserted) return { ok:false, endTicks:0 };
 
-    // Với subclip thì không cần set in/out nữa (Premiere hay ignore) -> chỉ lấy end thật để pack
     var realEnd = 0;
     try { realEnd = Number(inserted.end.ticks); } catch (eR) { realEnd = 0; }
     if (!realEnd || isNaN(realEnd)) realEnd = timelineStartTicks + secondsToTicks(durSec);
@@ -443,11 +424,136 @@ function sortClipsByTimelinePos(clips) {
     return clips;
 }
 
+// ================= MIX HELPERS =================
+function _trimStr(s) {
+    if (s === null || s === undefined) return '';
+    return String(s).replace(/^\s+|\s+$/g, '');
+}
+function _hashSeed(str) {
+    // FNV-1a 32-bit
+    str = String(str || '');
+    var h = 2166136261;
+    for (var i = 0; i < str.length; i++) {
+        h ^= str.charCodeAt(i);
+        // h *= 16777619 (mod 2^32)
+        h = (h + (h<<1) + (h<<4) + (h<<7) + (h<<8) + (h<<24)) >>> 0;
+    }
+    return h >>> 0;
+}
+function _makeRand(seed) {
+    var s = (seed >>> 0);
+    return function () {
+        s = (s * 1664525 + 1013904223) >>> 0;
+        return s / 4294967296;
+    };
+}
+function _shuffle(arr, seed) {
+    var rnd = _makeRand(seed);
+    for (var i = arr.length - 1; i > 0; i--) {
+        var j = Math.floor(rnd() * (i + 1));
+        var tmp = arr[i]; arr[i] = arr[j]; arr[j] = tmp;
+    }
+    return arr;
+}
+function _clipVideoKey(clip) {
+    return normalizeKey(normalizePath(clip && clip.video_path ? clip.video_path : ''));
+}
+function _hasOtherAvailable(orderKeys, groups, usedCount, perLimit, excludeKey) {
+    for (var i = 0; i < orderKeys.length; i++) {
+        var k = orderKeys[i];
+        if (k === excludeKey) continue;
+        var arr = groups[k];
+        if (arr && arr.length > 0) {
+            if (perLimit > 0 && usedCount[k] >= perLimit) continue;
+            return true;
+        }
+    }
+    return false;
+}
+
+/**
+ * Trộn clip trong cùng keyword:
+ * - group theo video_path
+ * - round-robin lấy 1 clip mỗi video
+ * - tránh 2 clip liên tiếp cùng video (nếu còn video khác)
+ */
+function mixClipsForKeyword(keyword, clipsIn) {
+    if (!MIX_WITHIN_KEYWORD) return clipsIn;
+
+    var clips = [];
+    for (var i = 0; i < clipsIn.length; i++) {
+        if (clipsIn[i] && clipsIn[i].video_path) clips.push(clipsIn[i]);
+    }
+    if (clips.length <= 1) return clipsIn;
+
+    var groups = {};     // videoKey -> [clip,...]
+    var orderKeys = [];  // giữ thứ tự video xuất hiện
+    for (var c = 0; c < clips.length; c++) {
+        var k = _clipVideoKey(clips[c]);
+        if (!k) continue;
+        if (!groups[k]) {
+            groups[k] = [];
+            orderKeys.push(k);
+        }
+        groups[k].push(clips[c]);
+    }
+    if (orderKeys.length <= 1) return clipsIn;
+
+    if (MIX_SHUFFLE_VIDEO_ORDER) {
+        _shuffle(orderKeys, _hashSeed(keyword || 'kw'));
+    }
+
+    var usedCount = {};
+    for (var u = 0; u < orderKeys.length; u++) usedCount[orderKeys[u]] = 0;
+
+    var out = [];
+    var lastKey = null;
+
+    while (true) {
+        if (MIX_MAX_CLIPS_PER_KEYWORD > 0 && out.length >= MIX_MAX_CLIPS_PER_KEYWORD) break;
+
+        var progressed = false;
+
+        for (var i2 = 0; i2 < orderKeys.length; i2++) {
+            if (MIX_MAX_CLIPS_PER_KEYWORD > 0 && out.length >= MIX_MAX_CLIPS_PER_KEYWORD) break;
+
+            var key = orderKeys[i2];
+            var arr = groups[key];
+            if (!arr || arr.length <= 0) continue;
+
+            if (MIX_PER_VIDEO_LIMIT > 0 && usedCount[key] >= MIX_PER_VIDEO_LIMIT) continue;
+
+            if (MIX_AVOID_SAME_VIDEO_CONSECUTIVE && lastKey !== null && key === lastKey) {
+                if (_hasOtherAvailable(orderKeys, groups, usedCount, MIX_PER_VIDEO_LIMIT, key)) {
+                    continue;
+                }
+            }
+
+            var clip = arr.shift(); // lấy clip đầu tiên của video đó
+            out.push(clip);
+            usedCount[key] = (usedCount[key] || 0) + 1;
+            lastKey = key;
+            progressed = true;
+        }
+
+        if (!progressed) break;
+    }
+
+    // Giữ những clip thiếu video_path (nếu có) ở cuối (an toàn)
+    if (out.length < clipsIn.length) {
+        for (var x = 0; x < clipsIn.length; x++) {
+            if (!clipsIn[x] || !clipsIn[x].video_path) out.push(clipsIn[x]);
+        }
+    }
+
+    return out;
+}
+
 // ================= MAIN =================
 function main() {
     log('');
     log('========================================');
-    log('  EXECUTE CUTS - STEP 3 (PACK + NO AUDIO)');
+    log('  EXECUTE CUTS - STEP 3 (PACK + NO AUDIO + MIX)');
     log('========================================');
 
     var cfg = readPathConfig();
@@ -461,11 +567,9 @@ function main() {
     if (!seq) { alert('ERROR: Khong co sequence nao dang mo!'); return; }
     log('Sequence: ' + seq.name);
 
-    // optional clear audio before
     if (CLEAR_ALL_AUDIO_AT_START) {
         clearAllAudioClips(seq);
     }
-
     if (DISABLE_ALL_AUDIO_TRACKS_BEFORE) {
         disableAllAudioTracks(seq);
     }
@@ -500,41 +604,136 @@ function main() {
 
     var successCount = 0, errorCount = 0, skipCount = 0, totalClips = 0;
 
-    for (var m = 0; m < cuts.length; m++) {
-        var marker = cuts[m];
-        var clips = marker.clips || [];
-        if (!clips.length) { skipCount++; continue; }
+    // ============================
+    // MODE A: bình thường (mỗi marker chạy riêng) + MIX trong keyword
+    // MODE B: MERGE markers cùng keyword thành 1 block
+    // ============================
+    if (!MERGE_MARKERS_SAME_KEYWORD) {
+        for (var m = 0; m < cuts.length; m++) {
+            var marker = cuts[m];
+            var clips = marker.clips || [];
+            if (!clips.length) { skipCount++; continue; }
 
-        sortClipsByTimelinePos(clips);
+            // sort trước rồi MIX
+            sortClipsByTimelinePos(clips);
+            var kw = _trimStr(marker.keyword || '');
+            if (!kw) kw = 'UNKNOWN';
+            if (MIX_WITHIN_KEYWORD) clips = mixClipsForKeyword(kw, clips);
 
-        var cursorTicks = secondsToTicks(safeNum(marker.timeline_start, safeNum(clips[0].timeline_pos, 0)));
+            var cursorTicks = secondsToTicks(safeNum(marker.timeline_start, safeNum(clips[0].timeline_pos, 0)));
 
-        log('');
-        log('[' + (m + 1) + '/' + cuts.length + '] ' + (marker.keyword || '') + ' | clips=' + clips.length);
+            log('');
+            log('[' + (m + 1) + '/' + cuts.length + '] ' + kw + ' | clips=' + clips.length + (MIX_WITHIN_KEYWORD ? ' | MIX=ON' : ''));
 
-        for (var c = 0; c < clips.length; c++) {
-            var clip = clips[c];
-            totalClips++;
+            for (var c = 0; c < clips.length; c++) {
+                var clip = clips[c];
+                totalClips++;
 
-            if (!clip || !clip.video_path) { skipCount++; continue; }
+                if (!clip || !clip.video_path) { skipCount++; continue; }
 
-            var vp = normalizePath(clip.video_path);
-            var projectItem = getOrImportVideo(vp, importBin);
-            if (!projectItem) { errorCount++; continue; }
+                var vp = normalizePath(clip.video_path);
+                var projectItem = getOrImportVideo(vp, importBin);
+                if (!projectItem) { errorCount++; continue; }
 
-            var startTicks = PACK_CLIPS_WITHIN_MARKER ? cursorTicks : secondsToTicks(safeNum(clip.timeline_pos, 0));
+                var startTicks = PACK_CLIPS_WITHIN_MARKER ? cursorTicks : secondsToTicks(safeNum(clip.timeline_pos, 0));
 
-            var res = placeAndTrim(seq, vTrack, projectItem, clip, startTicks);
-            if (res.ok) {
-                successCount++;
-                if (PACK_CLIPS_WITHIN_MARKER) cursorTicks = res.endTicks;
+                var res = placeAndTrim(seq, vTrack, projectItem, clip, startTicks);
+                if (res.ok) {
+                    successCount++;
+                    if (PACK_CLIPS_WITHIN_MARKER) cursorTicks = res.endTicks;
+                } else {
+                    errorCount++;
+                }
+            }
+        }
+    } else {
+        // ============================
+        // MERGE markers same keyword
+        // ============================
+        var groups = {};       // kw -> { kw, startSec, clips:[], order:int }
+        var kwList = [];
+        var orderCounter = 0;
+
+        for (var i = 0; i < cuts.length; i++) {
+            var mk = cuts[i];
+            var kw2 = _trimStr(mk.keyword || '');
+            if (!kw2) kw2 = 'UNKNOWN';
+
+            var mkClips = mk.clips || [];
+            if (!mkClips.length) continue;
+
+            sortClipsByTimelinePos(mkClips);
+
+            if (!groups[kw2]) {
+                groups[kw2] = { kw: kw2, startSec: safeNum(mk.timeline_start, safeNum(mkClips[0].timeline_pos, 0)), clips: [], order: orderCounter++ };
+                kwList.push(kw2);
             } else {
-                errorCount++;
+                var st2 = safeNum(mk.timeline_start, safeNum(mkClips[0].timeline_pos, 0));
+                if (st2 < groups[kw2].startSec) groups[kw2].startSec = st2;
+            }
+
+            for (var k = 0; k < mkClips.length; k++) groups[kw2].clips.push(mkClips[k]);
+        }
+
+        // sort keyword theo startSec (nhìn giống timeline)
+        for (var a = 0; a < kwList.length - 1; a++) {
+            for (var b = a + 1; b < kwList.length; b++) {
+                if (groups[kwList[a]].startSec > groups[kwList[b]].startSec) {
+                    var tmp = kwList[a]; kwList[a] = kwList[b]; kwList[b] = tmp;
+                }
+            }
+        }
+
+        var globalCursorTicks = 0;
+        if (PACK_KEYWORD_BLOCKS_SEQUENTIALLY) {
+            // bắt đầu từ keyword sớm nhất
+            if (kwList.length > 0) globalCursorTicks = secondsToTicks(groups[kwList[0]].startSec);
+        }
+
+        for (var g = 0; g < kwList.length; g++) {
+            var kwName = kwList[g];
+            var grp = groups[kwName];
+            var grpClips = grp.clips || [];
+            if (!grpClips.length) continue;
+
+            // MIX toàn bộ clip của keyword sau khi merge
+            if (MIX_WITHIN_KEYWORD) grpClips = mixClipsForKeyword(kwName, grpClips);
+
+            var cursorTicks2 = PACK_KEYWORD_BLOCKS_SEQUENTIALLY
+                ? globalCursorTicks
+                : secondsToTicks(safeNum(grp.startSec, safeNum(grpClips[0].timeline_pos, 0)));
+
+            log('');
+            log('[KW ' + (g + 1) + '/' + kwList.length + '] ' + kwName + ' | clips=' + grpClips.length + ' | MERGE=ON' + (MIX_WITHIN_KEYWORD ? ' | MIX=ON' : ''));
+
+            for (var cc = 0; cc < grpClips.length; cc++) {
+                var clip2 = grpClips[cc];
+                totalClips++;
+
+                if (!clip2 || !clip2.video_path) { skipCount++; continue; }
+
+                var vp2 = normalizePath(clip2.video_path);
+                var projectItem2 = getOrImportVideo(vp2, importBin);
+                if (!projectItem2) { errorCount++; continue; }
+
+                var startTicks2 = PACK_CLIPS_WITHIN_MARKER ? cursorTicks2 : secondsToTicks(safeNum(clip2.timeline_pos, 0));
+
+                var res2 = placeAndTrim(seq, vTrack, projectItem2, clip2, startTicks2);
+                if (res2.ok) {
+                    successCount++;
+                    if (PACK_CLIPS_WITHIN_MARKER) cursorTicks2 = res2.endTicks;
+                } else {
+                    errorCount++;
+                }
+            }
+
+            if (PACK_KEYWORD_BLOCKS_SEQUENTIALLY) {
+                globalCursorTicks = cursorTicks2; // nối keyword tiếp theo vào ngay sau keyword này
             }
         }
     }
 
-    // HARD CLEAN: remove ALL audio clips (absolute)
+    // HARD CLEAN: remove ALL audio clips
     if (CLEAR_ALL_AUDIO_AT_END) {
         unlockAllAudioTracks(seq);
         clearAllAudioClips(seq);

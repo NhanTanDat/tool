@@ -99,17 +99,76 @@ def _clean_keyword_line(s: str) -> str:
     return s
 
 
-def _get_character_prompt(keyword: str, max_segments: int, strict: bool) -> str:
+def _get_character_prompt(keyword: str, max_segments: int, strict: bool, has_reference_images: bool = False) -> str:
     """
     Generate prompt for finding clips where the person/character in keyword appears.
     Gemini will find scenes where the face of the person mentioned in keyword is visible.
     Focus on 2-4 second clips.
+
+    Args:
+        keyword: Character name
+        max_segments: Max clips to return
+        strict: Strict or lenient mode
+        has_reference_images: Whether reference images are provided
     """
     min_dur = CFG.face_clip_min_dur
     max_dur = CFG.face_clip_max_dur
 
-    if strict:
-        return f"""
+    if has_reference_images:
+        # Prompt with reference images
+        if strict:
+            return f"""
+TASK: Find video clips where the SAME PERSON shown in the reference image(s) appears.
+
+IMPORTANT: I have provided reference image(s) of a person named "{keyword}".
+Your job is to find clips in the VIDEO where THIS EXACT PERSON appears.
+Compare the face in the video with the reference image(s) to find matches.
+
+STRICT REQUIREMENTS:
+1. ONLY return clips where the SAME PERSON from the reference image appears
+2. The person's FACE must be clearly visible and match the reference
+3. Each clip MUST be {min_dur}-{max_dur} seconds long
+4. Clips must be NON-OVERLAPPING
+5. Return at most {max_segments} clips
+6. Focus on CLOSE-UP or MEDIUM shots for better face matching
+
+MATCHING CRITERIA:
+- Face structure and features match the reference image
+- Same person, even if different angle/lighting/expression
+- Clear face visibility for confident matching
+
+AVOID:
+- Different people who might look similar
+- Scenes where face is too small or blurry to match
+- Back of head or unclear shots
+
+OUTPUT:
+Return JSON with segments array. Each segment:
+- start_sec: Start time (seconds)
+- end_sec: End time (seconds) - duration MUST be {min_dur}-{max_dur}s
+- script_notes: What the person is doing in this clip
+- quality_score: 1-10 (10 = perfect face match with reference)
+- match_confidence: How confident the face matches reference (high/medium/low)
+""".strip()
+        else:
+            return f"""
+TASK: Find clips where the person from the reference image(s) MIGHT appear (LENIENT).
+
+Reference images show "{keyword}". Find any scene where this person might be visible.
+
+REQUIREMENTS:
+1. Clips should be approximately {min_dur}-{max_dur} seconds
+2. Return at most {max_segments} clips
+3. Include scenes where the person might appear, even if not certain
+
+OUTPUT:
+Return JSON with segments array: start_sec, end_sec, script_notes, quality_score.
+""".strip()
+
+    else:
+        # Original prompt without reference images
+        if strict:
+            return f"""
 TASK: Find video clips where the FACE of the person/character mentioned in "{keyword}" is VISIBLE.
 
 IMPORTANT: The keyword "{keyword}" contains a person/character name. Find clips where that person's FACE appears on screen.
@@ -139,8 +198,8 @@ Return JSON with segments array. Each segment:
 - script_notes: What the person is doing in this clip
 - quality_score: 1-10 (10 = perfect face visibility)
 """.strip()
-    else:
-        return f"""
+        else:
+            return f"""
 TASK: Find clips where the person/character in "{keyword}" MIGHT appear (LENIENT).
 
 Find any scene where the person mentioned might be visible, even if not 100% certain.
@@ -194,6 +253,10 @@ class Cfg:
 
     # Clip extraction settings
     max_clips_per_video: int = _safe_int_env("GENMINI_MAX_CLIPS_PER_VIDEO", 3)  # Chỉ lấy 2-3 clips tốt nhất mỗi video
+
+    # Reference image settings
+    use_reference_images: bool = _env_bool("GENMINI_USE_REFERENCE_IMAGES", "1")
+    max_reference_images: int = _safe_int_env("GENMINI_MAX_REFERENCE_IMAGES", 2)
 
     verbose: bool = _env_bool("GENMINI_VERBOSE", "1")
 
@@ -355,6 +418,127 @@ def _dedupe_segments(
     return final
 
 
+def _download_reference_images(keyword: str, out_dir: Path, max_images: int = 2) -> List[Path]:
+    """
+    Download reference images for a character/keyword from Google Images.
+
+    Args:
+        keyword: Character name to search for
+        out_dir: Directory to save images
+        max_images: Maximum number of images to download (default: 2)
+
+    Returns:
+        List of paths to downloaded images
+    """
+    out_dir.mkdir(parents=True, exist_ok=True)
+    images_dir = out_dir / "reference_images"
+    images_dir.mkdir(exist_ok=True)
+
+    # Check if already downloaded
+    existing = list(images_dir.glob("*.jpg")) + list(images_dir.glob("*.png"))
+    if existing:
+        _vinfo("[REF_IMG] Using %d existing reference images", len(existing[:max_images]))
+        return existing[:max_images]
+
+    _vinfo("[REF_IMG] Downloading reference images for '%s'...", keyword)
+
+    try:
+        import urllib.request
+        import urllib.parse
+
+        # Simple Google Images search (using direct image URLs)
+        search_query = urllib.parse.quote(f"{keyword} face portrait")
+        search_url = f"https://www.google.com/search?q={search_query}&tbm=isch"
+
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0 Safari/537.36'
+        }
+
+        req = urllib.request.Request(search_url, headers=headers)
+
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            html = resp.read().decode('utf-8', errors='ignore')
+
+        # Extract image URLs from HTML
+        import re
+        # Look for direct image URLs in the response
+        img_pattern = r'https://[^"\']+\.(?:jpg|jpeg|png|webp)'
+        found_urls = re.findall(img_pattern, html, re.IGNORECASE)
+
+        # Filter out thumbnails and get unique URLs
+        filtered_urls = []
+        for url in found_urls:
+            if 'encrypted-tbn' not in url and 'gstatic' not in url:
+                if url not in filtered_urls:
+                    filtered_urls.append(url)
+                    if len(filtered_urls) >= max_images * 3:  # Get extra in case some fail
+                        break
+
+        # Download images
+        downloaded = []
+        for idx, img_url in enumerate(filtered_urls):
+            if len(downloaded) >= max_images:
+                break
+
+            try:
+                img_req = urllib.request.Request(img_url, headers=headers)
+                with urllib.request.urlopen(img_req, timeout=10) as img_resp:
+                    content_type = img_resp.headers.get('Content-Type', '')
+                    if 'image' not in content_type:
+                        continue
+
+                    ext = 'jpg'
+                    if 'png' in content_type:
+                        ext = 'png'
+
+                    img_path = images_dir / f"ref_{idx}.{ext}"
+                    with open(img_path, 'wb') as f:
+                        f.write(img_resp.read())
+
+                    # Verify file size (skip tiny images)
+                    if img_path.stat().st_size > 5000:  # > 5KB
+                        downloaded.append(img_path)
+                        _vinfo("[REF_IMG] Downloaded: %s", img_path.name)
+                    else:
+                        img_path.unlink()
+
+            except Exception as e:
+                continue
+
+        if downloaded:
+            _vinfo("[REF_IMG] Got %d reference images for '%s'", len(downloaded), keyword)
+        else:
+            LOG.warning("[REF_IMG] Could not download reference images for '%s'", keyword)
+
+        return downloaded
+
+    except Exception as e:
+        LOG.warning("[REF_IMG] Error downloading reference images: %s", e)
+        return []
+
+
+def _upload_reference_images(image_paths: List[Path]) -> List:
+    """
+    Upload reference images to Gemini.
+
+    Returns:
+        List of uploaded Gemini file objects
+    """
+    if not image_paths or genai is None:
+        return []
+
+    uploaded = []
+    for img_path in image_paths:
+        try:
+            _vinfo("[UPLOAD] Uploading reference image: %s", img_path.name)
+            img_file = genai.upload_file(path=img_path)
+            uploaded.append(img_file)
+        except Exception as e:
+            LOG.warning("[UPLOAD] Failed to upload image %s: %s", img_path.name, e)
+
+    return uploaded
+
+
 def _download_proxy_video(video_url: str, out_dir: Path) -> Optional[Path]:
     out_dir.mkdir(parents=True, exist_ok=True)
     proxy_path = out_dir / "%(id)s_proxy.%(ext)s"
@@ -418,7 +602,7 @@ def _upload_and_wait_file(file_path: Path):
         return None
 
 
-def _gemini_analyze_video_content(video_file, keyword: str, max_segments: int, *, strict: bool, is_character: bool = None) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+def _gemini_analyze_video_content(video_file, keyword: str, max_segments: int, *, strict: bool, is_character: bool = None, reference_images: List = None) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
     """
     Analyze video content using Gemini AI.
 
@@ -428,6 +612,7 @@ def _gemini_analyze_video_content(video_file, keyword: str, max_segments: int, *
         max_segments: Maximum number of segments to return
         strict: Use strict or lenient analysis mode
         is_character: Force character detection mode. If None, auto-detect.
+        reference_images: List of uploaded Gemini image files for face matching
 
     Returns:
         Tuple of (filtered_segments, raw_segments)
@@ -443,6 +628,8 @@ def _gemini_analyze_video_content(video_file, keyword: str, max_segments: int, *
     if is_character is None:
         is_character = CFG.face_detection_mode
 
+    has_reference_images = reference_images and len(reference_images) > 0
+
     safety_settings = {
         HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_ONLY_HIGH,
         HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_ONLY_HIGH,
@@ -452,8 +639,11 @@ def _gemini_analyze_video_content(video_file, keyword: str, max_segments: int, *
 
     # Use character-specific prompt for face/person detection
     if is_character:
-        _vinfo("[GEMINI] Character mode: Finding face/person clips for '%s' (2-4s)", keyword)
-        prompt = _get_character_prompt(keyword, max_segments, strict)
+        if has_reference_images:
+            _vinfo("[GEMINI] Character mode WITH reference images for '%s'", keyword)
+        else:
+            _vinfo("[GEMINI] Character mode: Finding face/person clips for '%s' (2-4s)", keyword)
+        prompt = _get_character_prompt(keyword, max_segments, strict, has_reference_images)
         quality_min = CFG.strict_quality_min if strict else CFG.lenient_quality_min
         temperature = 0.15 if strict else 0.3  # Lower temperature for more precise face detection
         min_dur = CFG.face_clip_min_dur
@@ -524,8 +714,18 @@ JSON only. Provide concise notes. Provide dedupe_group for near-duplicates.
     for attempt in range(max_retries):
         try:
             model = genai.GenerativeModel(model_name=CFG.gemini_model)
+
+            # Build content list: reference images (if any) + video + prompt
+            content_parts = []
+            if has_reference_images:
+                # Add reference images first so Gemini sees them before the video
+                for ref_img in reference_images:
+                    content_parts.append(ref_img)
+            content_parts.append(video_file)
+            content_parts.append(prompt)
+
             response = model.generate_content(
-                [video_file, prompt],
+                content_parts,
                 generation_config=genai.GenerationConfig(
                     response_mime_type="application/json",
                     response_schema=response_schema,
@@ -630,6 +830,15 @@ def analyze_video_production_standard(video_url: str, keyword: str, max_segments
     if is_character:
         _vinfo("[ANALYZE] Face detection mode: finding clips with '%s' visible (2-4s)", keyword)
 
+    # Download reference images for face matching (if enabled)
+    reference_images = []
+    uploaded_ref_images = []
+    if is_character and CFG.use_reference_images:
+        ref_image_paths = _download_reference_images(keyword, cache_dir, CFG.max_reference_images)
+        if ref_image_paths:
+            uploaded_ref_images = _upload_reference_images(ref_image_paths)
+            reference_images = uploaded_ref_images
+
     video_path = _download_proxy_video(video_url, cache_dir)
     if not video_path:
         return []
@@ -640,21 +849,36 @@ def analyze_video_production_standard(video_url: str, keyword: str, max_segments
 
     _vinfo("[GEMINI] Analyzing VIDEO content for '%s'...", keyword)
 
-    strict_segs, strict_raw = _gemini_analyze_video_content(gemini_file, keyword, max_segments, strict=True, is_character=is_character)
+    strict_segs, strict_raw = _gemini_analyze_video_content(
+        gemini_file, keyword, max_segments,
+        strict=True, is_character=is_character,
+        reference_images=reference_images
+    )
     use_segs = strict_segs
     use_raw = strict_raw
 
     if CFG.retry_lenient and len(use_segs) < max(0, CFG.min_keep_per_video):
         _vinfo("[GEMINI] Strict too few (%d). Retrying LENIENT...", len(use_segs))
-        lenient_segs, lenient_raw = _gemini_analyze_video_content(gemini_file, keyword, max(3, min(max_segments, 6)), strict=False, is_character=is_character)
+        lenient_segs, lenient_raw = _gemini_analyze_video_content(
+            gemini_file, keyword, max(3, min(max_segments, 6)),
+            strict=False, is_character=is_character,
+            reference_images=reference_images
+        )
         if len(lenient_segs) > len(use_segs):
             use_segs = lenient_segs
             use_raw = lenient_raw
 
+    # Cleanup uploaded files
     try:
         genai.delete_file(gemini_file.name)
     except Exception:
         pass
+
+    for ref_img in uploaded_ref_images:
+        try:
+            genai.delete_file(ref_img.name)
+        except Exception:
+            pass
 
     # Determine duration constraints based on mode
     if is_character:

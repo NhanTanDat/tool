@@ -223,8 +223,8 @@ class Cfg:
     player_client: str = (os.environ.get("YTDLP_PLAYER_CLIENT", "android") or "android").strip().lower()
 
     pad_sec: float = _safe_float_env("GENMINI_PAD_SEC", 0.10)
-    min_seg_dur: float = _safe_float_env("GENMINI_MIN_SEG_DUR", 1.0)
-    max_seg_dur: float = _safe_float_env("GENMINI_MAX_SEG_DUR", 12.0)
+    min_seg_dur: float = _safe_float_env("GENMINI_MIN_SEG_DUR", 2.0)  # 2-4s clips
+    max_seg_dur: float = _safe_float_env("GENMINI_MAX_SEG_DUR", 4.0)  # 2-4s clips
 
     # Face/Character detection settings
     face_clip_min_dur: float = _safe_float_env("GENMINI_FACE_CLIP_MIN_DUR", 2.0)
@@ -662,7 +662,8 @@ HARD RULES:
 - Each clip should be a DIFFERENT moment (action/angle/context).
 
 DURATION:
-- Prefer 1–12 seconds.
+- Each clip MUST be 2-4 seconds long (optimal: 3 seconds).
+- Do NOT return clips shorter than 2 seconds or longer than 4 seconds.
 
 OUTPUT:
 JSON only. Provide concise notes. Provide dedupe_group for near-duplicates.
@@ -681,7 +682,8 @@ RULES:
 - If uncertain, still pick best-guess moments related to "{keyword}".
 
 DURATION:
-- Prefer 1–12 seconds.
+- Each clip MUST be 2-4 seconds long (optimal: 3 seconds).
+- Do NOT return clips shorter than 2 seconds or longer than 4 seconds.
 
 OUTPUT:
 JSON only. Provide concise notes. Provide dedupe_group for near-duplicates.

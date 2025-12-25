@@ -192,6 +192,9 @@ class Cfg:
     timeline_max_scenes_per_keyword: int = _safe_int_env("GENMINI_TIMELINE_MAX_SCENES_PER_KEYWORD", 0)
     timeline_sort_by_score: bool = _env_bool("GENMINI_TIMELINE_SORT_BY_SCORE", "1")
 
+    # Clip extraction settings
+    max_clips_per_video: int = _safe_int_env("GENMINI_MAX_CLIPS_PER_VIDEO", 3)  # Chỉ lấy 2-3 clips tốt nhất mỗi video
+
     verbose: bool = _env_bool("GENMINI_VERBOSE", "1")
 
 
@@ -741,9 +744,21 @@ def _seg_score(seg: Dict[str, Any]) -> float:
     return conf * 1000.0 + dur
 
 
-def run_genmini_project(dl_links_path: str, segments_path: str, max_segments: int = 8):
+def run_genmini_project(dl_links_path: str, segments_path: str, max_segments: int = None):
+    """
+    Process all videos and extract clips.
+
+    Args:
+        dl_links_path: Path to dl_links.txt
+        segments_path: Output path for segments JSON
+        max_segments: Max clips per video (default: CFG.max_clips_per_video = 3)
+    """
     _ensure_logging_ready()
     groups = read_dl_links(dl_links_path)
+
+    # Sử dụng config nếu không chỉ định
+    if max_segments is None:
+        max_segments = CFG.max_clips_per_video
 
     all_results: List[Dict[str, Any]] = []
     video_map: List[Dict[str, Any]] = []
@@ -751,12 +766,17 @@ def run_genmini_project(dl_links_path: str, segments_path: str, max_segments: in
 
     seen_by_kw: Dict[str, List[str]] = {}
 
+    # Để trộn clips theo keyword
+    clips_by_keyword: Dict[str, List[Dict[str, Any]]] = {}
+
     for keyword, urls in groups.items():
         kw_clean = _clean_keyword_line(keyword.replace("Group_", "").replace("_", " ").strip())
-        LOG.info("Processing: %s (%d videos)", kw_clean, len(urls))
+        LOG.info("Processing: %s (%d videos) - max %d clips/video", kw_clean, len(urls), max_segments)
 
+        # Không giới hạn số videos - xử lý tất cả
         for idx, url in enumerate(urls):
             try:
+                # Chỉ lấy 2-3 clips xuất sắc nhất từ mỗi video
                 segs = analyze_video_production_standard(url, kw_clean, max_segments)
                 original = list(segs)
 
@@ -788,6 +808,11 @@ def run_genmini_project(dl_links_path: str, segments_path: str, max_segments: in
                 )
 
                 if segs:
+                    # Thêm video info vào mỗi segment
+                    for s in segs:
+                        s["video_url"] = url
+                        s["video_global_index"] = global_idx
+
                     all_results.append(
                         {
                             "keyword": kw_clean,
@@ -797,6 +822,12 @@ def run_genmini_project(dl_links_path: str, segments_path: str, max_segments: in
                             "segments": segs,
                         }
                     )
+
+                    # Gộp vào clips_by_keyword để tạo json_cut
+                    if kw_clean not in clips_by_keyword:
+                        clips_by_keyword[kw_clean] = []
+                    clips_by_keyword[kw_clean].extend(segs)
+
                     _vinfo(" -> Found %d valid clips.", len(segs))
                 else:
                     _vinfo(" -> No valid clips found.")
@@ -806,9 +837,79 @@ def run_genmini_project(dl_links_path: str, segments_path: str, max_segments: in
 
             global_idx += 1
 
+    # Lưu segments theo format cũ
     Path(segments_path).write_text(json.dumps(all_results, indent=2, ensure_ascii=False), encoding="utf-8")
     Path(segments_path).with_name("video_map.json").write_text(json.dumps(video_map, indent=2, ensure_ascii=False), encoding="utf-8")
+
+    # Tạo json_cut - trộn tất cả clips của cùng 1 keyword
+    json_cut_data = _build_json_cut(clips_by_keyword)
+    json_cut_path = Path(segments_path).with_name("json_cut.json")
+    Path(json_cut_path).write_text(json.dumps(json_cut_data, indent=2, ensure_ascii=False), encoding="utf-8")
+    LOG.info("Created json_cut.json with %d keywords", len(json_cut_data.get("keywords", [])))
+
     return all_results
+
+
+def _build_json_cut(clips_by_keyword: Dict[str, List[Dict[str, Any]]]) -> Dict[str, Any]:
+    """
+    Tạo json_cut format - trộn tất cả clips của cùng 1 keyword.
+
+    Output format:
+    {
+        "keywords": [
+            {
+                "keyword": "Nguyen Van A",
+                "total_clips": 6,
+                "clips": [
+                    {
+                        "video_url": "...",
+                        "video_index": 0,
+                        "start_sec": 10.5,
+                        "end_sec": 13.5,
+                        "duration": 3.0,
+                        "confidence": 0.8,
+                        "reason": "..."
+                    },
+                    ...
+                ]
+            }
+        ]
+    }
+    """
+    keywords_list = []
+
+    for keyword, clips in clips_by_keyword.items():
+        # Sắp xếp theo confidence giảm dần
+        sorted_clips = sorted(clips, key=lambda x: float(x.get("confidence", 0)), reverse=True)
+
+        # Format lại clips
+        formatted_clips = []
+        for c in sorted_clips:
+            start = float(c.get("start_sec", 0))
+            end = float(c.get("end_sec", 0))
+            formatted_clips.append({
+                "video_url": c.get("video_url", ""),
+                "video_index": c.get("video_global_index", 0),
+                "start_sec": round(start, 2),
+                "end_sec": round(end, 2),
+                "duration": round(end - start, 2),
+                "confidence": round(float(c.get("confidence", 0)), 3),
+                "type": c.get("type", "CLIP"),
+                "reason": c.get("reason", ""),
+            })
+
+        keywords_list.append({
+            "keyword": keyword,
+            "total_clips": len(formatted_clips),
+            "clips": formatted_clips,
+        })
+
+    return {
+        "version": "2.0",
+        "description": "All clips grouped by keyword for cutting",
+        "total_keywords": len(keywords_list),
+        "keywords": keywords_list,
+    }
 
 
 def build_production_timeline(segments_json: str, output_csv: str) -> int:
@@ -906,7 +1007,9 @@ def build_production_timeline(segments_json: str, output_csv: str) -> int:
 
 
 def run_genmini_for_project(dl_links_path, segments_json_path, **kwargs):
-    return len(run_genmini_project(dl_links_path, segments_json_path, kwargs.get("max_segments_per_video", 8)))
+    # Sử dụng CFG.max_clips_per_video (default=3) thay vì 8
+    max_segs = kwargs.get("max_segments_per_video", None)
+    return len(run_genmini_project(dl_links_path, segments_json_path, max_segs))
 
 
 def build_timeline_csv_from_segments(segments_json_path, timeline_csv_path, **kwargs):
@@ -914,13 +1017,22 @@ def build_timeline_csv_from_segments(segments_json_path, timeline_csv_path, **kw
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(description="Gemini Video Analyzer - Extract face/character clips")
     parser.add_argument("--dl_links", default=str(ROOT_DIR / "data" / "dl_links.txt"))
     parser.add_argument("--segments", default=str(ROOT_DIR / "data" / "segments_genmini.json"))
     parser.add_argument("--timeline", default=str(ROOT_DIR / "data" / "timeline_export_merged.csv"))
-    parser.add_argument("--max_clips", type=int, default=8)
+    parser.add_argument("--max_clips", type=int, default=3, help="Max clips per video (default: 3)")
     args = parser.parse_args()
 
     _ensure_logging_ready()
+    LOG.info("=== Gemini Video Analyzer ===")
+    LOG.info("Face detection mode: %s", "ON (2-4s clips)" if CFG.face_detection_mode else "OFF")
+    LOG.info("Max clips per video: %d", args.max_clips)
+
     run_genmini_project(args.dl_links, args.segments, args.max_clips)
     build_production_timeline(args.segments, args.timeline)
+
+    LOG.info("Output files:")
+    LOG.info("  - segments: %s", args.segments)
+    LOG.info("  - json_cut: %s", str(Path(args.segments).with_name("json_cut.json")))
+    LOG.info("  - timeline: %s", args.timeline)

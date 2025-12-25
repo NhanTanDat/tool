@@ -1538,11 +1538,11 @@ Nhấn OK để tiếp tục...
         from tkinter import simpledialog
         vpk = simpledialog.askinteger(
             "Videos per Keyword",
-            "Số video download cho mỗi keyword (1-10):",
+            "Số video download cho mỗi keyword (1-100):",
             parent=self,
             initialvalue=3,
             minvalue=1,
-            maxvalue=10
+            maxvalue=100
         )
         if vpk is None:
             return
